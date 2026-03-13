@@ -1,13 +1,7 @@
+from pyspark.sql import functions as F
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 
-
-
-def _ensure_pandas(df):
-    # Spark DataFrame
-    if hasattr(df, "toPandas"):
-        return df.toPandas()
-    return df
 
 def plot_consumption(
     df,
@@ -21,17 +15,34 @@ def plot_consumption(
     dpi=120
 ):
 
-    data = _ensure_pandas(df).copy()
-
     group_cols = ["TIDPUNKT"]
 
     if splits:
         group_cols += splits
 
-    g = data.groupby(group_cols)[value_col].agg(agg)
+    agg_map = {
+        "mean": F.mean,
+        "sum": F.sum,
+        "max": F.max,
+        "variance": F.variance
+    }
+
+    g = (
+        df
+        .groupBy(group_cols)
+        .agg(agg_map[agg](value_col).alias(value_col))
+        .toPandas()
+    )
 
     if splits:
-        g = g.unstack(splits)
+        g = g.pivot_table(
+            index="TIDPUNKT",
+            columns=splits,
+            values=value_col
+        )
+
+    else:
+        g = g.set_index("TIDPUNKT")
 
     if "price" in (splits or []):
         g = g.drop(columns="all", errors="ignore")
@@ -41,10 +52,11 @@ def plot_consumption(
     g.plot(kind=kind, marker="o", ax=ax)
 
     title_map = {
-            "month": "Average Monthly Peak Consumption",
-            "hour": "Average Hourly Consumption Profile",
-            "weekday": "Average Consumption by Day of Week",
+        "month": "Average Monthly Peak Consumption",
+        "hour": "Average Hourly Consumption Profile",
+        "weekday": "Average Consumption by Day of Week",
     }
+
     xlabel_map = {
         "month": "Month",
         "hour": "Hour of Day",
@@ -71,20 +83,14 @@ def plot_consumption(
 
             parts = l.strip("()").split(", ")
 
-            # case 1: tariff only
             if parts == ["0"]:
                 new_labels.append("No tariff")
+
             elif parts == ["1"]:
                 new_labels.append("Tariff active")
 
-            # case 2: price + tariff
-            elif len(parts) == 2 and parts[0] in ["low","high"]:
-                price_label = "Low price period" if parts[0] == "low" else "High price period"
-                tariff_label = "Tariff active" if parts[1] == "1" else "No tariff"
-                new_labels.append(f"{price_label} – {tariff_label}")
+            elif len(parts) == 2 and "usage_group" in (splits or []):
 
-            # case 3: usage group + tariff
-            elif len(parts) == 2 and parts[0] in ["low","medium","high"]:
                 usage_map = {
                     "low": "Low usage households",
                     "medium": "Medium usage households",
@@ -93,7 +99,14 @@ def plot_consumption(
 
                 tariff_label = "Tariff active" if parts[1] == "1" else "No tariff"
 
-                new_labels.append(f"{usage_map[parts[0]]} – {tariff_label}")
+                new_labels.append(f"{usage_map.get(parts[0], parts[0])} – {tariff_label}")
+
+            elif len(parts) == 2 and "price" in (splits or []):
+
+                price_label = "Low price period" if parts[0] == "low" else "High price period"
+                tariff_label = "Tariff active" if parts[1] == "1" else "No tariff"
+
+                new_labels.append(f"{price_label} – {tariff_label}")
 
             else:
                 new_labels.append(l)
@@ -105,6 +118,7 @@ def plot_consumption(
     return ax
 
 
+
 def plot_tariff_adoption_by_usage(
     df,
     figsize=(8,5),
@@ -112,14 +126,20 @@ def plot_tariff_adoption_by_usage(
     show_percent=True
 ):
 
-    data = _ensure_pandas(df).copy()
+    g = (
+        df
+        .groupBy("usage_group")
+        .agg(F.mean("tariff_active").alias("share"))
+        .toPandas()
+    )
 
-    g = data.groupby("usage_group")["tariff_active"].mean()
+    g = g.set_index("usage_group")["share"]
 
     order = ["low", "medium", "high"]
     g = g.reindex(order)
 
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
     g.plot(kind="bar", ax=ax)
 
     ax.set_title("Tariff Adoption by Household Usage Group")
@@ -132,3 +152,60 @@ def plot_tariff_adoption_by_usage(
         ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
 
     return ax
+
+
+
+def plot_event_study_tariff(
+    df,
+    value_col="mean_consumption",
+    line_cols="usage_group",
+    window=6
+):
+
+    data = df.filter(F.col("tariff_start").isNotNull())
+
+    data = data.withColumn(
+        "event_time",
+        (
+            (F.year("TIDPUNKT") - F.year("tariff_start")) * 12 +
+            (F.month("TIDPUNKT") - F.month("tariff_start"))
+        )
+    )
+
+    data = data.filter(
+        (F.col("event_time") >= -window) &
+        (F.col("event_time") <= window)
+    )
+
+    if isinstance(line_cols, str):
+        line_cols = [line_cols]
+
+    g = (
+        data
+        .groupBy(["event_time"] + line_cols)
+        .agg(F.mean(value_col).alias(value_col))
+        .toPandas()
+    )
+
+    g = g.pivot_table(
+        index="event_time",
+        columns=line_cols,
+        values=value_col
+    )
+
+    ax = g.plot(marker="o")
+
+    plt.axvline(0, linestyle="--")
+
+    title = ", ".join(line_cols).replace("_", " ").title()
+    ax.legend(title=title)
+
+    plt.title("Electricity Consumption Around Tariff Adoption")
+    plt.xlabel("Months Relative to Tariff Adoption")
+    plt.ylabel("Average Electricity Consumption (kWh)")
+
+    plt.xticks(range(-window, window+1))
+
+    return ax
+
+

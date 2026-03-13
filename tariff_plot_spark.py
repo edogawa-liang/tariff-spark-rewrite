@@ -5,24 +5,36 @@ import seaborn as sns
 sns.set_style("whitegrid")
 
 
-def _ensure_pandas(df):
+# ============================================
+# Spark helper
+# ============================================
+
+def _to_pandas(df):
+    """Allow both Spark and pandas dataframe"""
     if hasattr(df, "toPandas"):
         return df.toPandas()
     return df
 
 
+# ============================================
+# Monthly adoption
+# ============================================
+
 def plot_monthly_adoption(tariff_df):
 
-    df = _ensure_pandas(tariff_df).copy()
+    df = _to_pandas(tariff_df).copy()
+
     df["Startdatum"] = pd.to_datetime(df["Startdatum"])
 
+    df["month"] = df["Startdatum"].dt.to_period("M").dt.to_timestamp()
+
     monthly = (
-        df.groupby(df["Startdatum"].dt.to_period("M"))["GS1-nr"]
+        df.groupby("month")["GS1-nr."]
         .nunique()
         .sort_index()
     )
 
-    monthly.index = monthly.index.to_timestamp()
+    monthly.index = monthly.index.strftime("%Y-%m")
 
     plt.figure()
     ax = monthly.plot(kind="bar")
@@ -31,56 +43,70 @@ def plot_monthly_adoption(tariff_df):
     plt.ylabel("Households")
     plt.xlabel("Month")
 
-    ax.set_xticklabels(monthly.index.strftime("%Y-%m"), rotation=30)
+    plt.xticks(rotation=30)
 
     return ax
 
 
+# ============================================
+# Monthly share
+# ============================================
 
 def plot_monthly_share(tariff_df, total_households):
 
-    df = _ensure_pandas(tariff_df).copy()
+    df = _to_pandas(tariff_df).copy()
+
     df["Startdatum"] = pd.to_datetime(df["Startdatum"])
 
+    df["month"] = df["Startdatum"].dt.to_period("M").dt.to_timestamp()
+
     monthly = (
-        df.groupby(df["Startdatum"].dt.to_period("M"))["GS1-nr"]
+        df.groupby("month")["GS1-nr."]
         .nunique()
         .sort_index()
     )
 
-    full_index = pd.period_range(monthly.index.min(), monthly.index.max(), freq="M")
+    full_index = pd.date_range(
+        monthly.index.min(),
+        monthly.index.max(),
+        freq="MS"
+    )
+
     monthly = monthly.reindex(full_index, fill_value=0)
 
     cumulative = monthly.cumsum()
+
     share = cumulative / total_households
-    share.index = share.index.astype(str)
 
     plt.figure()
+
     ax = share.plot(marker="o")
 
     plt.title("Cumulative Tariff Adoption Share")
     plt.ylabel("Share of households")
     plt.xlabel("Month")
 
-    plt.xticks(rotation=30)
+    ax.set_xticklabels(share.index.strftime("%Y-%m"), rotation=30)
 
     return ax
 
 
+# ============================================
+# Tariff group counts
+# ============================================
 
 def plot_tariff_group_counts(tariff_df):
 
-    df = _ensure_pandas(tariff_df).copy()
+    df = _to_pandas(tariff_df).copy()
 
-    df["tariff_group"] = df["Produktnamn"].str.extract(
-        r'(\d+\s*kW\s*(?:Villa|Normal))'
-    )
+    df["tariff_group"] = df["Produktnamn"]
 
     df = df.dropna(subset=["tariff_group"])
 
     counts = df["tariff_group"].value_counts()
 
     plt.figure()
+
     ax = counts.plot(kind="bar")
 
     plt.title("Tariff Group Choices")
@@ -92,40 +118,47 @@ def plot_tariff_group_counts(tariff_df):
     return ax
 
 
+# ============================================
+# Tariff group cumulative
+# ============================================
 
 def plot_tariff_group_cumulative(tariff_df):
 
-    df = _ensure_pandas(tariff_df).copy()
+    df = _to_pandas(tariff_df).copy()
 
-    df["tariff_group"] = df["Produktnamn"].str.extract(
+    df["tariff_plan"] = df["Produktnamn"].str.extract(
         r'(\d+\s*kW\s*(?:Villa|Normal))'
     )
 
-    df = df.dropna(subset=["tariff_group"])
+    df = df.dropna(subset=["tariff_plan"])
 
     df["Startdatum"] = pd.to_datetime(df["Startdatum"])
 
+    df["month"] = df["Startdatum"].dt.to_period("M").dt.to_timestamp()
+
     monthly = (
-        df.groupby(
-            [df["Startdatum"].dt.to_period("M"), "tariff_group"]
-        )["GS1-nr"]
+        df.groupby(["month", "tariff_plan"])["GS1-nr."]
         .nunique()
         .unstack()
         .fillna(0)
         .sort_index()
     )
 
-    # Align missing months with 0 counts
-    full_index = pd.period_range(monthly.index.min(), monthly.index.max(), freq="M")
+    full_index = pd.date_range(
+        monthly.index.min(),
+        monthly.index.max(),
+        freq="MS"
+    )
+
     monthly = monthly.reindex(full_index, fill_value=0)
 
     cumulative = monthly.cumsum()
-    cumulative.index = cumulative.index.astype(str)
 
     plt.figure()
+
     ax = cumulative.plot(marker="o")
 
-    plt.title("Cumulative Adoption by Tariff Group")
+    plt.title("Cumulative Adoption by Tariff Plan")
     plt.ylabel("Households")
     plt.xlabel("Month")
 
