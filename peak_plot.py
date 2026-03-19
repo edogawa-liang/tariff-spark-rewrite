@@ -160,8 +160,10 @@ def plot_peak_rank_boxplot(df):
         "peak3_consumption": "Peak 3"
     })
 
-    plt.figure(figsize=(6,4))
+    # Turn to numeric
+    data = data.apply(pd.to_numeric, errors="coerce")
 
+    plt.figure(figsize=(6,4))
     sns.boxplot(data=data)
 
     plt.ylabel("Consumption (kWh)")
