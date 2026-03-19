@@ -19,9 +19,9 @@ def _extract_peak_times(df):
 def _extract_peak_consumption(df):
 
     return pd.concat([
-        df["peak1_consumption"],
-        df["peak2_consumption"],
-        df["peak3_consumption"]
+        pd.to_numeric(df["peak1_consumption"], errors="coerce"),
+        pd.to_numeric(df["peak2_consumption"], errors="coerce"),
+        pd.to_numeric(df["peak3_consumption"], errors="coerce")
     ]).dropna()
 
 
