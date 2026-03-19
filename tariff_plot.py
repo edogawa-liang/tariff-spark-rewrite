@@ -5,25 +5,9 @@ import seaborn as sns
 sns.set_style("whitegrid")
 
 
-# ============================================
-# Spark helper
-# ============================================
-
-def _to_pandas(df):
-    """Allow both Spark and pandas dataframe"""
-    if hasattr(df, "toPandas"):
-        return df.toPandas()
-    return df
-
-
-# ============================================
-# Monthly adoption
-# ============================================
-
 def plot_monthly_adoption(tariff_df):
 
-    df = _to_pandas(tariff_df).copy()
-
+    df = tariff_df.copy()
     df["Startdatum"] = pd.to_datetime(df["Startdatum"])
 
     df["month"] = df["Startdatum"].dt.to_period("M").dt.to_timestamp()
@@ -33,7 +17,6 @@ def plot_monthly_adoption(tariff_df):
         .nunique()
         .sort_index()
     )
-
     monthly.index = monthly.index.strftime("%Y-%m")
 
     plt.figure()
@@ -42,20 +25,15 @@ def plot_monthly_adoption(tariff_df):
     plt.title("Monthly Tariff Adoption")
     plt.ylabel("Households")
     plt.xlabel("Month")
-
     plt.xticks(rotation=30)
 
     return ax
 
 
-# ============================================
-# Monthly share
-# ============================================
 
 def plot_monthly_share(tariff_df, total_households):
 
-    df = _to_pandas(tariff_df).copy()
-
+    df = tariff_df.copy()
     df["Startdatum"] = pd.to_datetime(df["Startdatum"])
 
     df["month"] = df["Startdatum"].dt.to_period("M").dt.to_timestamp()
@@ -75,11 +53,9 @@ def plot_monthly_share(tariff_df, total_households):
     monthly = monthly.reindex(full_index, fill_value=0)
 
     cumulative = monthly.cumsum()
-
     share = cumulative / total_households
 
     plt.figure()
-
     ax = share.plot(marker="o")
 
     plt.title("Cumulative Tariff Adoption Share")
@@ -91,13 +67,10 @@ def plot_monthly_share(tariff_df, total_households):
     return ax
 
 
-# ============================================
-# Tariff group counts
-# ============================================
 
 def plot_tariff_group_counts(tariff_df):
 
-    df = _to_pandas(tariff_df).copy()
+    df = tariff_df.copy()
 
     df["tariff_group"] = df["Produktnamn"]
 
@@ -106,7 +79,6 @@ def plot_tariff_group_counts(tariff_df):
     counts = df["tariff_group"].value_counts()
 
     plt.figure()
-
     ax = counts.plot(kind="bar")
 
     plt.title("Tariff Group Choices")
@@ -118,14 +90,11 @@ def plot_tariff_group_counts(tariff_df):
     return ax
 
 
-# ============================================
-# Tariff group cumulative
-# ============================================
-
 def plot_tariff_group_cumulative(tariff_df):
 
-    df = _to_pandas(tariff_df).copy()
+    df = tariff_df.copy()
 
+    # extract tariff group
     df["tariff_plan"] = df["Produktnamn"].str.extract(
         r'(\d+\s*kW\s*(?:Villa|Normal))'
     )
