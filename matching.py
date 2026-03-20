@@ -936,9 +936,12 @@ def save_matching_results_fabric(
     # plot（需要建資料夾）
     # ============================================================
     if save_plot:
-        plot_path = folder.replace("matching", "figures") + "/love_plot.png"
+        plot_path = folder.replace("Files/", "/lakehouse/default/Files/") \
+                        .replace("matching", "figures") + "/love_plot.png"
 
         os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+
+        print("🔥 Saving plot to:", plot_path)
 
         love_plot_from_spark(
             balance,
