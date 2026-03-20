@@ -600,7 +600,8 @@ def love_plot_from_spark(
     if show_plot:
         plt.show()
 
-    plt.close(fig)
+        plt.close(fig)
+
 
 # ============================================================
 # Save helpers
@@ -899,7 +900,6 @@ def save_matching_results_fabric(
     folder: str,
     config: Optional[dict] = None,
     save_plot: bool = True,
-    plot_title: str = "Matching Result"
 ):
     import os
     import json
@@ -931,26 +931,12 @@ def save_matching_results_fabric(
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
 
-    # ============================================================
-    # plot（需要建資料夾）
-    # ============================================================
-    if save_plot:
-        plot_path = folder.replace("Files/", "/lakehouse/default/Files/") \
-                        .replace("matching", "figures") + "/love_plot.png"
-
-        os.makedirs(os.path.dirname(plot_path), exist_ok=True)
-
-        print("🔥 Saving plot to:", plot_path)
-
-        love_plot_from_spark(
-            balance,
-            output_path=plot_path,
-            title=plot_title
-        )
 
     print("✅ Save completed")
 
 
+
+    # =========== Calendar Vector Matching =========== #
 # =========== Calendar Vector Matching =========== #
 def build_calendar_aligned_profiles(
     risk_rows: DataFrame,
