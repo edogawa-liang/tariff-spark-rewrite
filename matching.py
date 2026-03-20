@@ -566,42 +566,41 @@ def balance_table_spark(
 
 def love_plot_from_spark(
     balance_spark: DataFrame,
-    output_path: str,
-    title: str = "Covariate Balance"
+    output_path: Optional[str] = None,
+    title: str = "Covariate Balance",
+    show_plot: bool = True   # 👈 新增
 ):
-    """
-    balance table 很小，collect 成 pandas 畫圖通常沒問題。
-    """
     pdf = balance_spark.toPandas()
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
 
     if pdf is None or len(pdf) == 0:
         ax.set_title(title)
-        ax.set_xlabel("|Standardized Mean Difference|")
-        ax.set_ylabel("Covariate")
-        plt.tight_layout()
-        ensure_folder(output_path)
-        fig.savefig(output_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        return
+    else:
+        plot_df = pdf.copy()
+        plot_df["abs_SMD"] = pd.to_numeric(plot_df["SMD"], errors="coerce").abs()
+        plot_df = plot_df.sort_values("abs_SMD")
 
-    plot_df = pdf.copy()
-    plot_df["abs_SMD"] = pd.to_numeric(plot_df["SMD"], errors="coerce").abs()
-    plot_df["covariate"] = plot_df["covariate"].astype(str)
-    plot_df = plot_df.sort_values("abs_SMD", ascending=True)
+        ax.scatter(plot_df["abs_SMD"], plot_df["covariate"], s=40)
+        ax.axvline(0.1, linestyle="--")
 
-    ax.scatter(plot_df["abs_SMD"], plot_df["covariate"], s=40)
-    ax.axvline(0.1, linestyle="--")
     ax.set_title(title)
     ax.set_xlabel("|Standardized Mean Difference|")
     ax.set_ylabel("Covariate")
 
     plt.tight_layout()
-    ensure_folder(output_path)
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
 
+    # 👇 存檔（Fabric）
+    if output_path is not None:
+        real_path = output_path.replace("Files/", "/lakehouse/default/Files/")
+        os.makedirs(os.path.dirname(real_path), exist_ok=True)
+        fig.savefig(real_path, dpi=150, bbox_inches="tight")
+
+    # 👇 顯示在 notebook
+    if show_plot:
+        plt.show()
+
+    plt.close(fig)
 
 # ============================================================
 # Save helpers
