@@ -949,3 +949,149 @@ def save_matching_results_fabric(
         )
 
     print("✅ Save completed")
+
+
+# =========== Calendar Vector Matching =========== #
+
+def build_calendar_profiles_spark(
+    risk_rows: DataFrame,
+    lookback_months: int,
+    match_months: List[int]
+) -> DataFrame:
+
+    w_desc = Window.partitionBy("Ti", "id").orderBy(F.col("month").desc())
+
+    tmp = (
+        risk_rows
+        .withColumn("seq_idx", F.row_number().over(w_desc))
+    )
+
+    # 👉 理論最大長度
+    expected_obs = (lookback_months // 12) * len(match_months)
+
+    prof = (
+        tmp
+        .groupBy("Ti", "id", "adoption_month", "group")
+        .pivot("seq_idx", list(range(1, expected_obs + 1)))
+        .agg(F.first("top3_mean_consumption"))
+    )
+
+    # rename columns
+    for i in range(1, expected_obs + 1):
+        if str(i) in prof.columns:
+            prof = prof.withColumnRenamed(str(i), f"peak_sel_{i}")
+        else:
+            prof = prof.withColumn(f"peak_sel_{i}", F.lit(None).cast("double"))
+
+    return prof
+
+
+def match_topk_allow_missing(
+    profiles_z: DataFrame,
+    feature_cols: List[str],
+    k_neighbors: int = 5
+) -> DataFrame:
+
+    treated = profiles_z.where(F.col("group") == "treated").alias("t")
+    control = profiles_z.where(F.col("group") == "control").alias("c")
+
+    cand = (
+        treated.join(control, on=[F.col("t.Ti") == F.col("c.Ti")])
+        .where(F.col("t.id") != F.col("c.id"))
+    )
+
+    # 👉 計算 distance（只用 non-null pair）
+    dist_expr = None
+    valid_count = None
+
+    for c in feature_cols:
+        both_not_null = (
+            F.col(f"t.{c}_z").isNotNull() &
+            F.col(f"c.{c}_z").isNotNull()
+        )
+
+        diff_sq = F.when(
+            both_not_null,
+            F.pow(F.col(f"t.{c}_z") - F.col(f"c.{c}_z"), 2)
+        ).otherwise(F.lit(0.0))
+
+        count = F.when(both_not_null, 1).otherwise(0)
+
+        dist_expr = diff_sq if dist_expr is None else dist_expr + diff_sq
+        valid_count = count if valid_count is None else valid_count + count
+
+    cand = (
+        cand
+        .withColumn("valid_dim", valid_count)
+        .withColumn("distance", F.sqrt(dist_expr))
+        .where(F.col("valid_dim") > 0)   # 至少有1個維度
+    )
+
+    w = Window.partitionBy(F.col("t.Ti"), F.col("t.id")) \
+              .orderBy(F.col("distance"), F.col("c.id"))
+
+    matches = (
+        cand
+        .withColumn("match_rank", F.row_number().over(w))
+        .where(F.col("match_rank") <= k_neighbors)
+        .select(
+            F.col("t.id").alias("treated_id"),
+            F.col("c.id").alias("control_id"),
+            F.col("t.Ti").alias("adoption_month"),
+            "distance",
+            "valid_dim",
+            "match_rank"
+        )
+    )
+
+    return matches
+
+
+def run_calendar_matching_pipeline(
+    sdf: DataFrame,
+    output_folder: str,
+    lookback_months: int = 24,
+    match_months: List[int] = None,
+    k_neighbors: int = 5,
+    verbose: bool = True,
+    save_output: bool = False
+):
+
+    base = prepare_base_spark(sdf)
+
+    risk_rows = build_risk_set_rows(
+        base,
+        lookback_months=lookback_months,
+        match_months=match_months
+    ).cache()
+
+    if verbose:
+        print("risk_rows:", risk_rows.count())
+
+    profiles = build_calendar_profiles_spark(
+        risk_rows,
+        lookback_months,
+        match_months
+    ).cache()
+
+    feature_cols = [c for c in profiles.columns if c.startswith("peak_sel_")]
+
+    profiles_z = standardize_by_control(profiles, feature_cols).cache()
+
+    matches = match_topk_allow_missing(
+        profiles_z,
+        feature_cols,
+        k_neighbors=k_neighbors
+    ).cache()
+
+    matched_profiles = build_matched_profiles(profiles_z, matches).cache()
+
+    balance = balance_table_spark(matched_profiles, feature_cols).cache()
+
+    return {
+        "risk_rows": risk_rows,
+        "profiles": profiles_z,
+        "matches": matches,
+        "matched_profiles": matched_profiles,
+        "balance": balance
+    }
