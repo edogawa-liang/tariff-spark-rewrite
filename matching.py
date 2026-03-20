@@ -65,8 +65,9 @@ def prepare_base_spark(
     """
     out = sdf
 
-    if price_col is not None and price_value is not None and price_col in sdf.columns:
-        out = out.filter(F.col(price_col) == F.lit(price_value))
+    if price_col is not None and price_value is not None:
+        if price_col in sdf.columns:
+            out = out.filter(F.col(price_col) == F.lit(price_value))
 
     out = (
         out
@@ -647,6 +648,7 @@ def run_summary_matching_pipeline(
     repartition_by_ti: bool = True,
     verbose: bool = True,
     match_months: Optional[List[int]] = None,
+    save_output: bool = False 
 ) -> Dict[str, DataFrame]:
 
     if summary_vars is None:
@@ -734,21 +736,23 @@ def run_summary_matching_pipeline(
 
     if verbose:
         print("Saving outputs ...")
-    save_matching_outputs(
-        matches=matches,
-        profiles=matched_profiles,
-        balance=balance,
-        config={
-            "type": "summary",
-            "lookback_months": lookback_months,
-            "k_neighbors": k_neighbors,
-            "blocking_threshold": blocking_threshold,
-            "summary_vars": summary_vars,
-            "min_ti": min_ti,
-            "max_ti": max_ti
-        },
-        folder=output_folder
-    )
+
+    if save_output:
+        save_matching_outputs(
+            matches=matches,
+            profiles=matched_profiles,
+            balance=balance,
+            config={
+                "type": "summary",
+                "lookback_months": lookback_months,
+                "k_neighbors": k_neighbors,
+                "blocking_threshold": blocking_threshold,
+                "summary_vars": summary_vars,
+                "min_ti": min_ti,
+                "max_ti": max_ti
+            },
+            folder=output_folder
+        )
 
     return {
         "risk_rows": risk_rows,
@@ -774,6 +778,7 @@ def run_time_series_matching_pipeline(
     repartition_by_ti: bool = True,
     verbose: bool = True,
     match_months: Optional[List[int]] = None,
+    save_output: bool = False 
 ) -> Dict[str, DataFrame]:
 
     feature_cols = [f"peak_lag_{i}" for i in range(1, lookback_months + 1)]
@@ -863,20 +868,22 @@ def run_time_series_matching_pipeline(
 
     if verbose:
         print("Saving outputs ...")
-    save_matching_outputs(
-        matches=matches,
-        profiles=matched_profiles,
-        balance=balance,
-        config={
-            "type": "time_series_fixed_lag",
-            "lookback_months": lookback_months,
-            "k_neighbors": k_neighbors,
-            "feature_cols": feature_cols,
-            "min_ti": min_ti,
-            "max_ti": max_ti
-        },
-        folder=output_folder
-    )
+
+    if save_output:
+        save_matching_outputs(
+            matches=matches,
+            profiles=matched_profiles,
+            balance=balance,
+            config={
+                "type": "time_series_fixed_lag",
+                "lookback_months": lookback_months,
+                "k_neighbors": k_neighbors,
+                "feature_cols": feature_cols,
+                "min_ti": min_ti,
+                "max_ti": max_ti
+            },
+            folder=output_folder
+        )
 
     return {
         "risk_rows": risk_rows,
@@ -885,3 +892,58 @@ def run_time_series_matching_pipeline(
         "matched_profiles": matched_profiles,
         "balance": balance
     }
+
+
+
+def save_matching_results_fabric(
+    res: dict,
+    folder: str,
+    config: Optional[dict] = None,
+    save_plot: bool = True,
+    plot_title: str = "Matching Result"
+):
+    import os
+    import json
+
+    if not folder.startswith("Files/"):
+        raise ValueError("Folder must start with 'Files/' in Fabric")
+
+    matches = res["matches"]
+    profiles = res["matched_profiles"]
+    balance = res["balance"]
+
+    # ============================================================
+    # Spark parquet（不用建資料夾）
+    # ============================================================
+    print(f"Saving parquet to {folder} ...")
+
+    matches.write.mode("overwrite").parquet(f"{folder}/matches")
+    profiles.write.mode("overwrite").parquet(f"{folder}/profiles")
+    balance.write.mode("overwrite").parquet(f"{folder}/balance")
+
+    # ============================================================
+    # config（需要建資料夾）
+    # ============================================================
+    if config is not None:
+        config_path = f"{folder}/config.json"
+
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+
+    # ============================================================
+    # plot（需要建資料夾）
+    # ============================================================
+    if save_plot:
+        plot_path = folder.replace("matching", "figures") + "/love_plot.png"
+
+        os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+
+        love_plot_from_spark(
+            balance,
+            output_path=plot_path,
+            title=plot_title
+        )
+
+    print("✅ Save completed")
