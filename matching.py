@@ -952,38 +952,56 @@ def save_matching_results_fabric(
 
 
 # =========== Calendar Vector Matching =========== #
-
-def build_calendar_profiles_spark(
+def build_calendar_aligned_profiles(
     risk_rows: DataFrame,
-    lookback_months: int,
-    match_months: List[int]
+    match_months: List[int],
+    n_years: int = 2
 ) -> DataFrame:
 
-    w_desc = Window.partitionBy("Ti", "id").orderBy(F.col("month").desc())
-
-    tmp = (
+    df = (
         risk_rows
-        .withColumn("seq_idx", F.row_number().over(w_desc))
+        .withColumn("year", F.year("month"))
+        .withColumn("month_num", F.month("month"))
     )
 
-    # 👉 理論最大長度
-    expected_obs = (lookback_months // 12) * len(match_months)
+    # 👉 距離 Ti 幾年前
+    df = df.withColumn(
+        "year_diff",
+        F.year("Ti") - F.col("year")
+    )
 
+    # 👉 只保留過去 n_years
+    df = df.where(
+        (F.col("year_diff") >= 1) &
+        (F.col("year_diff") <= n_years)
+    )
+
+    # 👉 只保留指定月份
+    df = df.where(F.col("month_num").isin(match_months))
+
+    # 👉 month number → 字串（jan, feb…）
+    mapping_expr = F.create_map(
+        *[item for i in MONTH_ABB for item in (F.lit(i), F.lit(MONTH_ABB[i]))]
+    )
+
+    df = df.withColumn("month_str", mapping_expr[F.col("month_num")])
+
+    # 👉 feature name（jan_1, jan_2）
+    df = df.withColumn(
+        "feature_name",
+        F.concat(F.col("month_str"), F.lit("_"), F.col("year_diff"))
+    )
+
+    # 👉 pivot 成 wide format
     prof = (
-        tmp
+        df
         .groupBy("Ti", "id", "adoption_month", "group")
-        .pivot("seq_idx", list(range(1, expected_obs + 1)))
+        .pivot("feature_name")
         .agg(F.first("top3_mean_consumption"))
     )
 
-    # rename columns
-    for i in range(1, expected_obs + 1):
-        if str(i) in prof.columns:
-            prof = prof.withColumnRenamed(str(i), f"peak_sel_{i}")
-        else:
-            prof = prof.withColumn(f"peak_sel_{i}", F.lit(None).cast("double"))
-
     return prof
+
 
 
 def match_topk_allow_missing(
@@ -1000,7 +1018,6 @@ def match_topk_allow_missing(
         .where(F.col("t.id") != F.col("c.id"))
     )
 
-    # 👉 計算 distance（只用 non-null pair）
     dist_expr = None
     valid_count = None
 
@@ -1024,7 +1041,7 @@ def match_topk_allow_missing(
         cand
         .withColumn("valid_dim", valid_count)
         .withColumn("distance", F.sqrt(dist_expr))
-        .where(F.col("valid_dim") > 0)   # 至少有1個維度
+        .where(F.col("valid_dim") > 0)
     )
 
     w = Window.partitionBy(F.col("t.Ti"), F.col("t.id")) \
@@ -1047,46 +1064,114 @@ def match_topk_allow_missing(
     return matches
 
 
-def run_calendar_matching_pipeline(
+def run_calendar_matching_aligned(
     sdf: DataFrame,
     output_folder: str,
-    lookback_months: int = 24,
-    match_months: List[int] = None,
+    id_col: str = "aID",
+    month_col: str = "TIDPUNKT",
+    adoption_col: str = "tariff_start",
+    price_col: Optional[str] = "price",
+    price_value: Optional[str] = "all",
+    lookback_years: int = 2,
+    match_months: List[int] = [1,2,3,11,12],
     k_neighbors: int = 5,
+    repartition_by_ti: bool = True,
     verbose: bool = True,
     save_output: bool = False
-):
+) -> Dict[str, DataFrame]:
 
-    base = prepare_base_spark(sdf)
+    # ============================================================
+    # base
+    # ============================================================
+    base = prepare_base_spark(
+        sdf=sdf,
+        id_col=id_col,
+        month_col=month_col,
+        adoption_col=adoption_col,
+        price_col=price_col,
+        price_value=price_value
+    )
 
+    # ============================================================
+    # risk set
+    # ============================================================
     risk_rows = build_risk_set_rows(
         base,
-        lookback_months=lookback_months,
+        lookback_months=lookback_years * 12,
         match_months=match_months
-    ).cache()
+    )
+
+    if repartition_by_ti:
+        risk_rows = risk_rows.repartition("Ti")
+
+    risk_rows = risk_rows.cache()
 
     if verbose:
         print("risk_rows:", risk_rows.count())
 
-    profiles = build_calendar_profiles_spark(
+    # ============================================================
+    # profiles（calendar aligned）
+    # ============================================================
+    profiles = build_calendar_aligned_profiles(
         risk_rows,
-        lookback_months,
-        match_months
-    ).cache()
+        match_months=match_months,
+        n_years=lookback_years
+    )
 
-    feature_cols = [c for c in profiles.columns if c.startswith("peak_sel_")]
+    feature_cols = [
+        c for c in profiles.columns
+        if c not in ["Ti", "id", "adoption_month", "group"]
+    ]
 
-    profiles_z = standardize_by_control(profiles, feature_cols).cache()
+    if repartition_by_ti:
+        profiles = profiles.repartition("Ti")
 
+    profiles = profiles.cache()
+
+    # ============================================================
+    # standardize
+    # ============================================================
+    profiles_z = standardize_by_control(profiles, feature_cols)
+
+    if repartition_by_ti:
+        profiles_z = profiles_z.repartition("Ti")
+
+    profiles_z = profiles_z.cache()
+
+    # ============================================================
+    # matching
+    # ============================================================
     matches = match_topk_allow_missing(
         profiles_z,
         feature_cols,
         k_neighbors=k_neighbors
-    ).cache()
+    )
 
+    matches = matches.cache()
+
+    # ============================================================
+    # matched profiles + balance
+    # ============================================================
     matched_profiles = build_matched_profiles(profiles_z, matches).cache()
 
     balance = balance_table_spark(matched_profiles, feature_cols).cache()
+
+    # ============================================================
+    # save（可選）
+    # ============================================================
+    if save_output:
+        save_matching_outputs(
+            matches=matches,
+            profiles=matched_profiles,
+            balance=balance,
+            config={
+                "type": "calendar_aligned",
+                "lookback_years": lookback_years,
+                "match_months": match_months,
+                "feature_cols": feature_cols
+            },
+            folder=output_folder
+        )
 
     return {
         "risk_rows": risk_rows,
