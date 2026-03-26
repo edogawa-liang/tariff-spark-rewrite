@@ -139,7 +139,8 @@ def build_risk_set_rows(
     lookback_months: int = 12,
     min_ti: Optional[str] = None,
     max_ti: Optional[str] = None,
-    match_months: Optional[List[int]] = None
+    match_months: Optional[List[int]] = None,
+    control_type: str = "never_treated"  
 ) -> DataFrame:
     """
     產出 risk-set 明細：
@@ -185,6 +186,25 @@ def build_risk_set_rows(
         .alias("m")
     )
 
+    # =========================
+    # control definition
+    # =========================
+    if control_type == "risk_set":
+        cond = (
+            (F.col("u.adoption_month") == F.col("t.Ti")) |
+            (F.col("u.adoption_month").isNull()) |
+            (F.col("u.adoption_month") > F.col("t.Ti"))
+        )
+
+    elif control_type == "never_treated":
+        cond = (
+            (F.col("u.adoption_month") == F.col("t.Ti")) |
+            (F.col("u.adoption_month").isNull())
+        )
+
+    else:
+        raise ValueError("control_type must be 'risk_set' or 'never_treated'")
+
     # 注意這裡是 Ti 與每月資料的 cross join，再用時間窗過濾
     risk_rows = (
         monthly.alias("m")
@@ -193,11 +213,7 @@ def build_risk_set_rows(
         .where(
             (F.col("m.month") < F.col("t.Ti")) &
             (F.col("m.month") >= F.add_months(F.col("t.Ti"), -lookback_months)) &
-            (
-                (F.col("u.adoption_month") == F.col("t.Ti")) |
-                (F.col("u.adoption_month").isNull()) |
-                (F.col("u.adoption_month") > F.col("t.Ti"))
-            )
+            cond
         )
         .withColumn(
             "group",
@@ -238,12 +254,11 @@ def build_summary_profiles_spark(
     與你原本邏輯對應：
       - peak_mean
       - peak_sd
+      - peak_volatility
       - mean_consumption
       - variance_consumption
       - total_consumption
       - trend
-
-    peak_volatility 這版也一併做出來，若不用可不選。
     """
     # 先依月排序，做 x 與 lag
     w_order = Window.partitionBy("Ti", "id").orderBy("month")
@@ -648,7 +663,8 @@ def run_summary_matching_pipeline(
     repartition_by_ti: bool = True,
     verbose: bool = True,
     match_months: Optional[List[int]] = None,
-    save_output: bool = False 
+    save_output: bool = False,
+    control_type: str = "never_treated" 
 ) -> Dict[str, DataFrame]:
 
     if summary_vars is None:
@@ -672,7 +688,8 @@ def run_summary_matching_pipeline(
         lookback_months=lookback_months,
         min_ti=min_ti,
         max_ti=max_ti,
-        match_months=match_months 
+        match_months=match_months,
+        control_type=control_type
     )
     if repartition_by_ti:
         risk_rows = risk_rows.repartition("Ti")
@@ -749,7 +766,8 @@ def run_summary_matching_pipeline(
                 "blocking_threshold": blocking_threshold,
                 "summary_vars": summary_vars,
                 "min_ti": min_ti,
-                "max_ti": max_ti
+                "max_ti": max_ti,
+                "control_type": control_type
             },
             folder=output_folder
         )
@@ -778,7 +796,8 @@ def run_time_series_matching_pipeline(
     repartition_by_ti: bool = True,
     verbose: bool = True,
     match_months: Optional[List[int]] = None,
-    save_output: bool = False 
+    save_output: bool = False,
+    control_type: str = "never_treated" 
 ) -> Dict[str, DataFrame]:
 
     feature_cols = [f"peak_lag_{i}" for i in range(1, lookback_months + 1)]
@@ -801,7 +820,8 @@ def run_time_series_matching_pipeline(
         lookback_months=lookback_months,
         min_ti=min_ti,
         max_ti=max_ti,
-        match_months=match_months
+        match_months=match_months,
+        control_type=control_type
     )
     if repartition_by_ti:
         risk_rows = risk_rows.repartition("Ti")
@@ -880,7 +900,8 @@ def run_time_series_matching_pipeline(
                 "k_neighbors": k_neighbors,
                 "feature_cols": feature_cols,
                 "min_ti": min_ti,
-                "max_ti": max_ti
+                "max_ti": max_ti,
+                "control_type": control_type
             },
             folder=output_folder
         )
@@ -1063,12 +1084,19 @@ def run_calendar_matching_aligned(
     k_neighbors: int = 5,
     repartition_by_ti: bool = True,
     verbose: bool = True,
-    save_output: bool = False
+    save_output: bool = False,
+    control_type: str = "never_treated"
 ) -> Dict[str, DataFrame]:
+
+    if verbose:
+        print("Running calendar-aligned matching...")
 
     # ============================================================
     # base
     # ============================================================
+    if verbose:
+        print("Preparing base dataframe ...")
+
     base = prepare_base_spark(
         sdf=sdf,
         id_col=id_col,
@@ -1081,10 +1109,14 @@ def run_calendar_matching_aligned(
     # ============================================================
     # risk set
     # ============================================================
+    if verbose:
+        print("Building risk set rows ...")
+
     risk_rows = build_risk_set_rows(
         base,
         lookback_months=lookback_years * 12,
-        match_months=match_months
+        match_months=match_months,
+        control_type=control_type
     )
 
     if repartition_by_ti:
@@ -1093,11 +1125,15 @@ def run_calendar_matching_aligned(
     risk_rows = risk_rows.cache()
 
     if verbose:
-        print("risk_rows:", risk_rows.count())
+        print("risk_rows count =", risk_rows.count())
+        risk_rows.groupBy("Ti", "group").count().orderBy("Ti", "group").show(50, truncate=False)
 
     # ============================================================
     # profiles（calendar aligned）
     # ============================================================
+    if verbose:
+        print("Building calendar-aligned profiles ...")
+
     profiles = build_calendar_aligned_profiles(
         risk_rows,
         match_months=match_months,
@@ -1114,9 +1150,15 @@ def run_calendar_matching_aligned(
 
     profiles = profiles.cache()
 
+    if verbose:
+        print("profiles count =", profiles.count())
+
     # ============================================================
     # standardize
     # ============================================================
+    if verbose:
+        print("Standardizing by controls ...")
+
     profiles_z = standardize_by_control(profiles, feature_cols)
 
     if repartition_by_ti:
@@ -1124,9 +1166,15 @@ def run_calendar_matching_aligned(
 
     profiles_z = profiles_z.cache()
 
+    if verbose:
+        print("profiles_z count =", profiles_z.count())
+
     # ============================================================
     # matching
     # ============================================================
+    if verbose:
+        print("Matching top-k (allow missing) ...")
+
     matches = match_topk_allow_missing(
         profiles_z,
         feature_cols,
@@ -1135,16 +1183,35 @@ def run_calendar_matching_aligned(
 
     matches = matches.cache()
 
+    if verbose:
+        print("matches count =", matches.count())
+
     # ============================================================
     # matched profiles + balance
     # ============================================================
+    if verbose:
+        print("Building matched profiles ...")
+
     matched_profiles = build_matched_profiles(profiles_z, matches).cache()
+
+    if verbose:
+        print("matched_profiles count =", matched_profiles.count())
+
+    if verbose:
+        print("Computing balance table ...")
 
     balance = balance_table_spark(matched_profiles, feature_cols).cache()
 
+    if verbose:
+        print("balance count =", balance.count())
+        balance.show(50, truncate=False)
+
     # ============================================================
-    # save（可選）
+    # save
     # ============================================================
+    if verbose:
+        print("Saving outputs ...")
+
     if save_output:
         save_matching_outputs(
             matches=matches,
@@ -1154,7 +1221,8 @@ def run_calendar_matching_aligned(
                 "type": "calendar_aligned",
                 "lookback_years": lookback_years,
                 "match_months": match_months,
-                "feature_cols": feature_cols
+                "feature_cols": feature_cols,
+                "control_type": control_type
             },
             folder=output_folder
         )
@@ -1166,3 +1234,61 @@ def run_calendar_matching_aligned(
         "matched_profiles": matched_profiles,
         "balance": balance
     }
+
+
+
+# Double check the matching results
+# post-matching balance check
+def check_balance_on_new_covariates(
+    risk_rows: DataFrame,
+    matches: DataFrame,
+    check_vars: List[str]
+) -> DataFrame:
+    """
+    用「未參與 matching 的 covariates」來做 balance 檢查
+
+    Parameters
+    ----------
+    risk_rows : 原始 risk set（run_* pipeline 的輸出）
+    matches   : matching 結果
+    check_vars: 想檢查的 covariates（例如 ["trend", "variance_consumption"])
+
+    Returns
+    -------
+    balance table (Spark DataFrame)
+    """
+
+    print("Rebuilding profiles for balance check...")
+
+    # 重新 build summary profiles（用完整變數池）
+    full_profiles = build_summary_profiles_spark(
+        risk_rows,
+        summary_vars=[
+            "peak_mean",
+            "peak_sd",
+            "peak_volatility",
+            "mean_consumption",
+            "variance_consumption",
+            "total_consumption",
+            "trend"
+        ]
+    )
+
+    # 只保留你要檢查的欄位
+    keep_cols = ["Ti", "id", "adoption_month", "group"] + check_vars
+    full_profiles = full_profiles.select(*keep_cols)
+
+    print("Filtering matched samples...")
+
+    # 只保留 matched 樣本
+    matched_profiles = build_matched_profiles(full_profiles, matches).cache()
+
+    print("Matched profiles count =", matched_profiles.count())
+
+    print("Computing balance table...")
+
+    balance = balance_table_spark(matched_profiles, check_vars)
+
+    balance.show(50, truncate=False)
+
+    return balance
