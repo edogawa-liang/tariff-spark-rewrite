@@ -1340,4 +1340,49 @@ def check_balance_full_safe(res: dict):
     else:
         print("All summary variables were used in matching.")
 
+
+    # ------------------------------------------------------------
+    # Step 5: calendar high-price period check (NEW)
+    # ------------------------------------------------------------
+    print("\n" + "=" * 60)
+    print("=== CALENDAR HIGH-PRICE PERIOD CHECK ===")
+
+    # 如果 match_vars 已經是 calendar feature（例如 jan_1），就不用再做
+    is_calendar_matching = any("_" in v for v in match_vars)
+
+    if not is_calendar_matching:
+        print("Running additional calendar-based validation...")
+
+        # 👉 你想檢查的月份（high price months）
+        high_price_months = [1, 2, 3, 11, 12]
+
+        calendar_profiles = build_calendar_aligned_profiles(
+            risk_rows,
+            match_months=high_price_months,
+            n_years=2
+        )
+
+        calendar_profiles = build_matched_profiles(
+            calendar_profiles,
+            matches
+        ).cache()
+
+        cal_cols = [
+            c for c in calendar_profiles.columns
+            if c not in ["Ti", "id", "adoption_month", "group"]
+        ]
+
+        if cal_cols:
+            balance_calendar = balance_table_spark(
+                calendar_profiles,
+                cal_cols
+            )
+
+            balance_calendar.show(50, truncate=False)
+        else:
+            print("No calendar covariates available.")
+
+    else:
+        print("Skipping calendar check (already calendar matching).")
+
     return
