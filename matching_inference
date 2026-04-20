@@ -1,0 +1,166 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Build matched panel
+def build_matched_panel(matches, month_result):
+    """
+    Build matched panel dataset with:
+    - correct duplication (with replacement)
+    - cohort alignment
+    - event_time
+    """
+
+    # ✅ 1. cohort → period
+    matches["cohort"] = pd.to_datetime(matches["adoption_month"]).dt.to_period("M")
+
+    # ✅ 2. 建立 match_id（關鍵🔥）
+    matches = matches.reset_index(drop=True)
+    matches["match_id"] = matches.index
+
+    # ✅ 3. treated mapping
+    treated_map = matches[["match_id", "treated_id", "cohort"]].copy()
+    treated_map.columns = ["match_id", "aID", "cohort"]
+    treated_map["treatment"] = 1
+
+    # ✅ 4. control mapping（正確版本）
+    control_map = matches[["match_id", "control_id", "cohort"]].copy()
+    control_map.columns = ["match_id", "aID", "cohort"]
+    control_map["treatment"] = 0
+
+    # ✅ 5. combine
+    match_map = pd.concat([treated_map, control_map], axis=0)
+
+    # ✅ 6. merge panel
+    df = month_result.merge(match_map, on="aID", how="inner")
+
+    # ✅ 7. 時間轉換
+    df["TIDPUNKT"] = pd.to_datetime(df["TIDPUNKT"]).dt.to_period("M")
+
+    # ✅ 8. 建立 event_time（核心🔥）
+    df["event_time"] = (df["TIDPUNKT"] - df["cohort"]).apply(lambda x: x.n)
+
+    return df
+
+
+# monthly treatment effect 
+def compute_effect(df, outcome_col="top3_mean_consumption"):
+
+    results = []
+
+    for t in sorted(df["event_time"].dropna().unique()):
+        d = df[df["event_time"] == t]
+
+        treated = d[d["treatment"] == 1][outcome_col]
+        control = d[d["treatment"] == 0][outcome_col]
+
+        if len(treated) < 2 or len(control) < 2:
+            continue
+
+        mean_t = treated.mean()
+        mean_c = control.mean()
+
+        var_t = treated.var(ddof=1)
+        var_c = control.var(ddof=1)
+
+        n_t = len(treated)
+        n_c = len(control)
+
+        effect = mean_t - mean_c
+        se = np.sqrt(var_t / n_t + var_c / n_c)
+
+        t_stat = effect / se if se > 0 else np.nan
+
+        results.append({
+            "event_time": t,
+            "mean_treated": mean_t,
+            "mean_control": mean_c,
+            "effect": effect,
+            "se": se,
+            "t_stat": t_stat,
+            "n_treated": n_t,
+            "n_control": n_c
+        })
+
+    return pd.DataFrame(results)
+
+
+# Confidence Interval
+def add_confidence_interval(effect_df, alpha=0.05):
+    """
+    Add 95% CI
+    """
+
+    z = 1.96  # for 95%
+
+    effect_df["ci_low"] = effect_df["effect"] - z * effect_df["se"]
+    effect_df["ci_high"] = effect_df["effect"] + z * effect_df["se"]
+
+    return effect_df
+
+
+# dynamic effect
+def plot_dynamic_effect(effect_df):
+    plt.figure(figsize=(8,5))
+
+    plt.plot(effect_df["event_time"], effect_df["effect"], marker="o")
+
+    plt.fill_between(
+        effect_df["event_time"],
+        effect_df["ci_low"],
+        effect_df["ci_high"],
+        alpha=0.2
+    )
+
+    plt.axhline(0, linestyle="--")
+    plt.axvline(0, linestyle="--")
+
+    plt.xlabel("Event Time")
+    plt.ylabel("Treatment Effect")
+    plt.title("Dynamic Treatment Effect")
+
+    plt.show()
+
+
+# Average treatment effect（ATT）
+def compute_average_treatment_effect(effect_df, post_period_only=True):
+    """
+    Compute average treatment effect (ATT)
+    """
+
+    if post_period_only:
+        df = effect_df[effect_df["event_time"] >= 0]
+    else:
+        df = effect_df.copy()
+
+    att = df["effect"].mean()
+
+    # 簡單 SE（平均）
+    se = df["effect"].std(ddof=1) / np.sqrt(len(df))
+
+    ci_low = att - 1.96 * se
+    ci_high = att + 1.96 * se
+
+    return {
+        "ATT": att,
+        "SE": se,
+        "CI_low": ci_low,
+        "CI_high": ci_high
+    }
+
+
+def run_matching_inference(df, outcome_col="top3_mean_consumption"):
+
+    # Step 1: monthly effect
+    effect_df = compute_effect(df, outcome_col)
+
+    # Step 2: CI
+    effect_df = add_confidence_interval(effect_df)
+
+    # Step 3: plot
+    plot_dynamic_effect(effect_df)
+
+    # Step 4: ATT
+    att = compute_average_treatment_effect(effect_df)
+
+    return effect_df, att
