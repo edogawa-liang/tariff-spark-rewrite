@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.stats import norm
 
 # Build matched panel
 def build_matched_panel(matches, month_result):
@@ -88,10 +89,10 @@ def compute_effect(df, outcome_col="top3_mean_consumption"):
 # Confidence Interval
 def add_confidence_interval(effect_df, alpha=0.05):
     """
-    Add 95% CI
+    Add confidence interval with customizable alpha
     """
 
-    z = 1.96  # for 95%
+    z = norm.ppf(1 - alpha / 2)
 
     effect_df["ci_low"] = effect_df["effect"] - z * effect_df["se"]
     effect_df["ci_high"] = effect_df["effect"] + z * effect_df["se"]
