@@ -233,6 +233,38 @@ def compute_average_treatment_effect(effect_df, post_period_only=True):
     }
 
 
+def compute_att_by_cohort(effect_df, post_period_only=True):
+
+    results = []
+
+    for c in effect_df["cohort"].unique():
+
+        d = effect_df[effect_df["cohort"] == c]
+
+        if post_period_only:
+            d = d[d["event_time"] >= 0]
+
+        if len(d) == 0:
+            continue
+
+        att = d["effect"].mean()
+        se = d["effect"].std(ddof=1) / np.sqrt(len(d))
+
+        ci_low = att - 1.96 * se
+        ci_high = att + 1.96 * se
+
+        results.append({
+            "cohort": c,
+            "ATT": att,
+            "SE": se,
+            "CI_low": ci_low,
+            "CI_high": ci_high,
+            "n_periods": len(d)
+        })
+
+    return pd.DataFrame(results)
+
+
 def run_full_analysis(df, outcome_col="top3_mean_consumption"):
 
     print("===== OVERALL EFFECT =====")
@@ -247,20 +279,24 @@ def run_full_analysis(df, outcome_col="top3_mean_consumption"):
 
     print("ATT:", att)
 
-    print("\n===== COHORT EFFECT =====")
+    print("\n===== COHORT DYNAMIC EFFECT =====")
 
-    # cohort
+    # cohort dynamic
     cohort_df = compute_effect_by_cohort(df, outcome_col)
     cohort_df = add_confidence_interval(cohort_df)
 
-    print("Plotting each cohort...")
     plot_dynamic_by_cohort(cohort_df)
-
-    print("Plotting all cohorts together...")
     plot_all_cohorts(cohort_df)
+
+    print("\n===== ATT BY COHORT =====")
+
+    att_cohort_df = compute_att_by_cohort(cohort_df)
+
+    print(att_cohort_df)
 
     return {
         "overall": overall_df,
         "cohort": cohort_df,
-        "att": att
+        "att": att,
+        "att_by_cohort": att_cohort_df
     }
