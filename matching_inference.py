@@ -7,38 +7,35 @@ from scipy.stats import norm
 def build_matched_panel(matches, month_result):
     """
     Build matched panel dataset with:
-    - correct duplication (with replacement)
-    - cohort alignment
+    - treated kept once per cohort
+    - controls allowed to repeat across pairs
     - event_time
     """
 
-    # ✅ 1. cohort → period
+    matches = matches.copy()
+    month_result = month_result.copy()
+
+    # 1. cohort
     matches["cohort"] = pd.to_datetime(matches["adoption_month"]).dt.to_period("M")
 
-    # ✅ 2. 建立 match_id（關鍵🔥）
-    matches = matches.reset_index(drop=True)
-    matches["match_id"] = matches.index
-
-    # ✅ 3. treated mapping
-    treated_map = matches[["match_id", "treated_id", "cohort"]].copy()
-    treated_map.columns = ["match_id", "aID", "cohort"]
+    # 2. treated: drop duplicates
+    treated_map = matches[["treated_id", "cohort"]].drop_duplicates().copy()
+    treated_map.columns = ["aID", "cohort"]
     treated_map["treatment"] = 1
 
-    # ✅ 4. control mapping（正確版本）
-    control_map = matches[["match_id", "control_id", "cohort"]].copy()
-    control_map.columns = ["match_id", "aID", "cohort"]
+    # 3. controls: keep duplicates (with replacement)
+    control_map = matches[["control_id", "cohort"]].copy()
+    control_map.columns = ["aID", "cohort"]
     control_map["treatment"] = 0
 
-    # ✅ 5. combine
-    match_map = pd.concat([treated_map, control_map], axis=0)
+    # 4. combine
+    match_map = pd.concat([treated_map, control_map], axis=0, ignore_index=True)
 
-    # ✅ 6. merge panel
+    # 5. merge panel
     df = month_result.merge(match_map, on="aID", how="inner")
 
-    # ✅ 7. 時間轉換
+    # 6. time
     df["TIDPUNKT"] = pd.to_datetime(df["TIDPUNKT"]).dt.to_period("M")
-
-    # ✅ 8. 建立 event_time（核心🔥）
     df["event_time"] = (df["TIDPUNKT"] - df["cohort"]).apply(lambda x: x.n)
 
     return df
@@ -86,12 +83,50 @@ def compute_effect(df, outcome_col="top3_mean_consumption"):
     return pd.DataFrame(results)
 
 
+def compute_effect_by_cohort(df, outcome_col="top3_mean_consumption"):
+
+    results = []
+
+    cohorts = sorted(df["cohort"].dropna().unique())
+
+    for c in cohorts:
+        d_cohort = df[df["cohort"] == c]
+
+        for t in sorted(d_cohort["event_time"].dropna().unique()):
+            d = d_cohort[d_cohort["event_time"] == t]
+
+            treated = d[d["treatment"] == 1][outcome_col]
+            control = d[d["treatment"] == 0][outcome_col]
+
+            if len(treated) < 2 or len(control) < 2:
+                continue
+
+            mean_t = treated.mean()
+            mean_c = control.mean()
+
+            var_t = treated.var(ddof=1)
+            var_c = control.var(ddof=1)
+
+            n_t = len(treated)
+            n_c = len(control)
+
+            effect = mean_t - mean_c
+            se = np.sqrt(var_t / n_t + var_c / n_c)
+
+            results.append({
+                "cohort": c,
+                "event_time": t,
+                "effect": effect,
+                "se": se,
+                "n_treated": n_t,
+                "n_control": n_c
+            })
+
+    return pd.DataFrame(results)
+
+
 # Confidence Interval
 def add_confidence_interval(effect_df, alpha=0.05):
-    """
-    Add confidence interval with customizable alpha
-    """
-
     z = norm.ppf(1 - alpha / 2)
 
     effect_df["ci_low"] = effect_df["effect"] - z * effect_df["se"]
@@ -123,6 +158,54 @@ def plot_dynamic_effect(effect_df):
     plt.show()
 
 
+def plot_dynamic_by_cohort(effect_df):
+
+    cohorts = effect_df["cohort"].unique()
+
+    for c in cohorts:
+        d = effect_df[effect_df["cohort"] == c].sort_values("event_time")
+
+        plt.figure(figsize=(6,4))
+
+        plt.plot(d["event_time"], d["effect"], marker="o")
+
+        plt.fill_between(
+            d["event_time"],
+            d["ci_low"],
+            d["ci_high"],
+            alpha=0.2
+        )
+
+        plt.axhline(0, linestyle="--")
+        plt.axvline(0, linestyle="--")
+
+        plt.title(f"Cohort = {c}")
+        plt.xlabel("Event Time")
+        plt.ylabel("Treatment Effect")
+
+        plt.show()
+
+
+def plot_all_cohorts(effect_df):
+
+    plt.figure(figsize=(8,5))
+
+    for c in effect_df["cohort"].unique():
+        d = effect_df[effect_df["cohort"] == c].sort_values("event_time")
+
+        plt.plot(d["event_time"], d["effect"], alpha=0.5, label=str(c))
+
+    plt.axhline(0, linestyle="--")
+    plt.axvline(0, linestyle="--")
+
+    plt.xlabel("Event Time")
+    plt.ylabel("Treatment Effect")
+    plt.title("Dynamic Effect by Cohort")
+
+    plt.legend(bbox_to_anchor=(1.05,1))
+    plt.show()
+
+
 # Average treatment effect（ATT）
 def compute_average_treatment_effect(effect_df, post_period_only=True):
     """
@@ -150,18 +233,34 @@ def compute_average_treatment_effect(effect_df, post_period_only=True):
     }
 
 
-def run_matching_inference(df, outcome_col="top3_mean_consumption"):
+def run_full_analysis(df, outcome_col="top3_mean_consumption"):
 
-    # Step 1: monthly effect
-    effect_df = compute_effect(df, outcome_col)
+    print("===== OVERALL EFFECT =====")
 
-    # Step 2: CI
-    effect_df = add_confidence_interval(effect_df)
+    # overall
+    overall_df = compute_effect(df, outcome_col)
+    overall_df = add_confidence_interval(overall_df)
 
-    # Step 3: plot
-    plot_dynamic_effect(effect_df)
+    plot_dynamic_effect(overall_df)
 
-    # Step 4: ATT
-    att = compute_average_treatment_effect(effect_df)
+    att = compute_average_treatment_effect(overall_df)
 
-    return effect_df, att
+    print("ATT:", att)
+
+    print("\n===== COHORT EFFECT =====")
+
+    # cohort
+    cohort_df = compute_effect_by_cohort(df, outcome_col)
+    cohort_df = add_confidence_interval(cohort_df)
+
+    print("Plotting each cohort...")
+    plot_dynamic_by_cohort(cohort_df)
+
+    print("Plotting all cohorts together...")
+    plot_all_cohorts(cohort_df)
+
+    return {
+        "overall": overall_df,
+        "cohort": cohort_df,
+        "att": att
+    }
