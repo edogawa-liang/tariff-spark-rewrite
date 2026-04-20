@@ -300,3 +300,47 @@ def run_full_analysis(df, outcome_col="top3_mean_consumption"):
         "att": att,
         "att_by_cohort": att_cohort_df
     }
+
+
+
+def save_results(results, save_path):
+    """
+    Save results dict to CSV files
+    """
+
+    os.makedirs(save_path, exist_ok=True)
+
+    # 1. overall dynamic
+    if "overall" in results:
+        results["overall"].to_csv(
+            os.path.join(save_path, "overall_dynamic.csv"),
+            index=False
+        )
+
+    # 2. cohort dynamic
+    if "cohort" in results:
+        results["cohort"].to_csv(
+            os.path.join(save_path, "cohort_dynamic.csv"),
+            index=False
+        )
+
+    # 3. overall ATT (dict → DataFrame)
+    if "att" in results:
+        pd.DataFrame([results["att"]]).to_csv(
+            os.path.join(save_path, "att_overall.csv"),
+            index=False
+        )
+
+    # 4. cohort ATT
+    if "att_by_cohort" in results:
+        results["att_by_cohort"].to_csv(
+            os.path.join(save_path, "att_by_cohort.csv"),
+            index=False
+        )
+
+    print(f"✅ Results saved to: {save_path}")
+
+
+    results = run_full_analysis(df)
+
+save_results(results, "/lakehouse/default/Files/output/matching_result")
