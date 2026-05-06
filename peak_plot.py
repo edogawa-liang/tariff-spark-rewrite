@@ -7,22 +7,53 @@ import seaborn as sns
 # Helpers
 # =====================================================
 
-def _extract_peak_times(df):
+def _extract_peak_long(df):
+    """
+    Convert peak1/2/3 columns into long format.
+    This keeps peak time and consumption correctly paired.
+    """
 
-    return pd.concat([
-        df["peak1_time"],
-        df["peak2_time"],
-        df["peak3_time"]
-    ]).dropna()
+    pieces = []
+
+    for i in [1, 2, 3]:
+        temp = pd.DataFrame({
+            "time": pd.to_datetime(df[f"peak{i}_time"], errors="coerce"),
+            "consumption": pd.to_numeric(df[f"peak{i}_consumption"], errors="coerce"),
+            "peak_rank": i
+        })
+        pieces.append(temp)
+
+    out = pd.concat(pieces, ignore_index=True).dropna(subset=["time", "consumption"])
+
+    out["month"] = out["time"].dt.month
+    out["hour"] = out["time"].dt.hour
+
+    return out
+
+
+def _extract_peak_times(df):
+    return _extract_peak_long(df)["time"]
 
 
 def _extract_peak_consumption(df):
+    return _extract_peak_long(df)["consumption"]
 
-    return pd.concat([
-        pd.to_numeric(df["peak1_consumption"], errors="coerce"),
-        pd.to_numeric(df["peak2_consumption"], errors="coerce"),
-        pd.to_numeric(df["peak3_consumption"], errors="coerce")
-    ]).dropna()
+
+def _safe_max(*dfs):
+    vals = []
+    for x in dfs:
+        if x is not None and len(x) > 0:
+            m = x.max().max()
+            if pd.notna(m):
+                vals.append(m)
+    return max(vals) if vals else 0
+
+
+def _safe_abs_max(df):
+    if df is None or len(df) == 0:
+        return 0
+    m = df.abs().max().max()
+    return m if pd.notna(m) else 0
 
 
 # =====================================================
@@ -36,13 +67,7 @@ def plot_peak_hour_distribution(df, mode="count"):
         consumption -> total peak consumption
     """
 
-    times = _extract_peak_times(df)
-    cons = _extract_peak_consumption(df)
-
-    temp = pd.DataFrame({
-        "hour": times.dt.hour,
-        "consumption": cons
-    }).dropna()
+    temp = _extract_peak_long(df)
 
     if mode == "count":
         data = temp["hour"].value_counts().sort_index()
@@ -55,7 +80,7 @@ def plot_peak_hour_distribution(df, mode="count"):
     else:
         raise ValueError("mode must be 'count' or 'consumption'")
 
-    plt.figure(figsize=(8,4))
+    plt.figure(figsize=(8, 4))
     data.sort_index().plot.bar()
 
     plt.xlabel("Hour of Day")
@@ -72,29 +97,21 @@ def plot_peak_hour_distribution(df, mode="count"):
 
 def plot_peak_heatmap(df, mode="count"):
     """
-    Heatmap of peak demand by month and hour
+    Heatmap of peak demand by month and hour.
     """
 
-    times = _extract_peak_times(df)
-    cons = _extract_peak_consumption(df)
-
-    temp = pd.DataFrame({
-        "month": times.dt.month,
-        "hour": times.dt.hour,
-        "consumption": cons
-    }).dropna()
+    temp = _extract_peak_long(df)
 
     if mode == "count":
-
         heatmap = temp.pivot_table(
             index="month",
             columns="hour",
             aggfunc="size",
             fill_value=0
         )
+        cbar_label = "Peak count"
 
     elif mode == "consumption":
-
         heatmap = temp.pivot_table(
             index="month",
             columns="hour",
@@ -102,16 +119,19 @@ def plot_peak_heatmap(df, mode="count"):
             aggfunc="sum",
             fill_value=0
         )
+        cbar_label = "Total peak consumption (kWh)"
 
     else:
         raise ValueError("mode must be 'count' or 'consumption'")
 
-    plt.figure(figsize=(10,5))
+    heatmap = heatmap.reindex(index=range(1, 13), columns=range(24), fill_value=0)
+
+    plt.figure(figsize=(10, 5))
 
     sns.heatmap(
         heatmap,
         cmap="YlOrRd",
-        cbar_kws={"label": "Peak count" if mode=="count" else "Peak consumption (kWh)"}
+        cbar_kws={"label": cbar_label}
     )
 
     plt.title(f"Peak Heatmap ({mode})")
@@ -128,10 +148,9 @@ def plot_peak_heatmap(df, mode="count"):
 
 def plot_peak_consumption_distribution(df):
 
-    peaks = _extract_peak_consumption(df)
+    peaks = _extract_peak_long(df)["consumption"]
 
-    plt.figure(figsize=(8,4))
-
+    plt.figure(figsize=(8, 4))
     plt.hist(peaks, bins=30)
 
     plt.xlabel("Peak Consumption (kWh)")
@@ -148,24 +167,18 @@ def plot_peak_consumption_distribution(df):
 
 def plot_peak_rank_boxplot(df):
 
-    data = df[
-        [
-            "peak1_consumption",
-            "peak2_consumption",
-            "peak3_consumption"
-        ]
-    ].rename(columns={
-        "peak1_consumption": "Peak 1",
-        "peak2_consumption": "Peak 2",
-        "peak3_consumption": "Peak 3"
+    temp = _extract_peak_long(df)
+
+    temp["peak_rank"] = temp["peak_rank"].map({
+        1: "Peak 1",
+        2: "Peak 2",
+        3: "Peak 3"
     })
 
-    # Turn to numeric
-    data = data.apply(pd.to_numeric, errors="coerce")
+    plt.figure(figsize=(6, 4))
+    sns.boxplot(data=temp, x="peak_rank", y="consumption")
 
-    plt.figure(figsize=(6,4))
-    sns.boxplot(data=data)
-
+    plt.xlabel("")
     plt.ylabel("Consumption (kWh)")
     plt.title("Peak Rank Comparison")
 
@@ -174,7 +187,7 @@ def plot_peak_rank_boxplot(df):
 
 
 # =====================================================
-# Tariff peak heatmap
+# Tariff peak count heatmap
 # =====================================================
 
 def plot_tariff_peak_heatmap(df, price_label="all"):
@@ -182,12 +195,10 @@ def plot_tariff_peak_heatmap(df, price_label="all"):
     df = df.copy()
 
     never = df[df["tariff_start"].isna()]
-
     before = df[
         (df["tariff_start"].notna()) &
         (df["tariff_active"] == 0)
     ]
-
     after = df[df["tariff_active"] == 1]
 
     groups = {
@@ -200,12 +211,7 @@ def plot_tariff_peak_heatmap(df, price_label="all"):
 
     for name, subset in groups.items():
 
-        times = _extract_peak_times(subset)
-
-        temp = pd.DataFrame({
-            "month": times.dt.month,
-            "hour": times.dt.hour
-        }).dropna()
+        temp = _extract_peak_long(subset)
 
         heatmap = temp.pivot_table(
             index="month",
@@ -214,16 +220,9 @@ def plot_tariff_peak_heatmap(df, price_label="all"):
             fill_value=0
         )
 
-        # normalization
-        heatmap = heatmap.div(heatmap.sum(axis=1), axis=0)
-
         heatmaps[name] = heatmap
 
-    never = heatmaps["Never adopters"]
-    before = heatmaps["Adopters BEFORE"]
-    after = heatmaps["Adopters AFTER"]
-
-    all_months = sorted(set(never.index) | set(before.index) | set(after.index))
+    all_months = sorted(set().union(*[set(h.index) for h in heatmaps.values()]))
     all_hours = list(range(24))
 
     for key in heatmaps:
@@ -239,31 +238,67 @@ def plot_tariff_peak_heatmap(df, price_label="all"):
 
     diff = after - before
 
-    fig, axes = plt.subplots(2,2, figsize=(14,10))
+    vmax = _safe_max(never, before, after)
+    diff_max = _safe_abs_max(diff)
 
-    sns.heatmap(never, cmap="YlOrRd", ax=axes[0,0])
-    axes[0,0].set_title("Never adopters")
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
-    sns.heatmap(before, cmap="YlOrRd", ax=axes[0,1])
-    axes[0,1].set_title("Adopters BEFORE")
+    sns.heatmap(
+        never,
+        cmap="YlOrRd",
+        vmin=0,
+        vmax=vmax,
+        ax=axes[0, 0],
+        cbar_kws={"label": "Peak count"}
+    )
+    axes[0, 0].set_title("Never adopters")
 
-    sns.heatmap(after, cmap="YlOrRd", ax=axes[1,0])
-    axes[1,0].set_title("Adopters AFTER")
+    sns.heatmap(
+        before,
+        cmap="YlOrRd",
+        vmin=0,
+        vmax=vmax,
+        ax=axes[0, 1],
+        cbar_kws={"label": "Peak count"}
+    )
+    axes[0, 1].set_title("Adopters BEFORE")
 
-    sns.heatmap(diff, cmap="coolwarm", center=0, ax=axes[1,1])
-    axes[1,1].set_title("Difference (After − Before)")
+    sns.heatmap(
+        after,
+        cmap="YlOrRd",
+        vmin=0,
+        vmax=vmax,
+        ax=axes[1, 0],
+        cbar_kws={"label": "Peak count"}
+    )
+    axes[1, 0].set_title("Adopters AFTER")
+
+    sns.heatmap(
+        diff,
+        cmap="coolwarm",
+        center=0,
+        vmin=-diff_max,
+        vmax=diff_max,
+        ax=axes[1, 1],
+        cbar_kws={"label": "After − Before peak count"}
+    )
+    axes[1, 1].set_title("Difference (After − Before)")
 
     for ax in axes.flat:
         ax.set_xlabel("Hour")
         ax.set_ylabel("Month")
 
     title_map = {
-        "all": "Peak Timing Heatmap (Overall Peaks)",
-        "high": "Peak Timing Heatmap (High Price Period Peaks)",
-        "low": "Peak Timing Heatmap (Low Price Period Peaks)"
+        "all": "Peak Count Heatmap (Overall Peaks)",
+        "high": "Peak Count Heatmap (High Price Period Peaks)",
+        "low": "Peak Count Heatmap (Low Price Period Peaks)"
     }
 
-    fig.suptitle(title_map.get(price_label, "Peak Timing Heatmap"), fontsize=16, y=1.02)
+    fig.suptitle(
+        title_map.get(price_label, "Peak Count Heatmap"),
+        fontsize=16,
+        y=1.02
+    )
 
     plt.tight_layout()
     plt.show()
@@ -273,101 +308,133 @@ def plot_tariff_peak_heatmap(df, price_label="all"):
 # Tariff peak consumption heatmap
 # =====================================================
 
-def plot_tariff_consumption_heatmap(df, price_label="all"):
+def plot_tariff_consumption_heatmap(df, price_label="all", modes=("sum", "mean")):
+    """
+    Automatically plots both:
+        sum  -> total peak consumption / burden
+        mean -> average peak size / conditional intensity
+    """
 
-    df = df.copy()
+    for mode in modes:
 
-    never = df[df["tariff_start"].isna()]
+        if mode not in ["sum", "mean"]:
+            raise ValueError("modes must contain only 'sum' or 'mean'")
 
-    before = df[
-        (df["tariff_start"].notna()) &
-        (df["tariff_active"] == 0)
-    ]
+        df_work = df.copy()
 
-    after = df[df["tariff_active"] == 1]
+        never = df_work[df_work["tariff_start"].isna()]
+        before = df_work[
+            (df_work["tariff_start"].notna()) &
+            (df_work["tariff_active"] == 0)
+        ]
+        after = df_work[df_work["tariff_active"] == 1]
 
-    groups = {
-        "Never adopters": never,
-        "Adopters BEFORE": before,
-        "Adopters AFTER": after
-    }
+        groups = {
+            "Never adopters": never,
+            "Adopters BEFORE": before,
+            "Adopters AFTER": after
+        }
 
-    heatmaps = {}
+        heatmaps = {}
 
-    for name, subset in groups.items():
+        for name, subset in groups.items():
 
-        times = _extract_peak_times(subset)
-        cons = _extract_peak_consumption(subset)
+            temp = _extract_peak_long(subset)
 
-        temp = pd.DataFrame({
-            "month": times.dt.month,
-            "hour": times.dt.hour,
-            "consumption": cons
-        }).dropna()
+            heatmap = temp.pivot_table(
+                index="month",
+                columns="hour",
+                values="consumption",
+                aggfunc=mode,
+                fill_value=0 if mode == "sum" else None
+            )
 
-        heatmap = temp.pivot_table(
-            index="month",
-            columns="hour",
-            values="consumption",
-            aggfunc="mean"   # Use mean!!
+            heatmaps[name] = heatmap
+
+        all_months = sorted(set().union(*[set(h.index) for h in heatmaps.values()]))
+        all_hours = list(range(24))
+
+        for key in heatmaps:
+            heatmaps[key] = heatmaps[key].reindex(
+                index=all_months,
+                columns=all_hours,
+                fill_value=0 if mode == "sum" else None
+            )
+
+        never = heatmaps["Never adopters"]
+        before = heatmaps["Adopters BEFORE"]
+        after = heatmaps["Adopters AFTER"]
+
+        diff = after - before
+
+        vmax = _safe_max(never, before, after)
+        diff_max = _safe_abs_max(diff)
+
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+        if mode == "sum":
+            cbar_label = "Total Peak Consumption (kWh)"
+            diff_label = "After − Before total peak consumption"
+        else:
+            cbar_label = "Average Peak Consumption (kWh)"
+            diff_label = "After − Before average peak consumption"
+
+        sns.heatmap(
+            never,
+            cmap="YlOrRd",
+            vmin=0,
+            vmax=vmax,
+            ax=axes[0, 0],
+            cbar_kws={"label": cbar_label}
         )
+        axes[0, 0].set_title("Never adopters")
 
-        heatmaps[name] = heatmap
-
-    never = heatmaps["Never adopters"]
-    before = heatmaps["Adopters BEFORE"]
-    after = heatmaps["Adopters AFTER"]
-
-    all_months = sorted(set(never.index) | set(before.index) | set(after.index))
-    all_hours = list(range(24))
-
-    for key in heatmaps:
-        heatmaps[key] = heatmaps[key].reindex(
-            index=all_months,
-            columns=all_hours
+        sns.heatmap(
+            before,
+            cmap="YlOrRd",
+            vmin=0,
+            vmax=vmax,
+            ax=axes[0, 1],
+            cbar_kws={"label": cbar_label}
         )
+        axes[0, 1].set_title("Adopters BEFORE")
 
-    never = heatmaps["Never adopters"]
-    before = heatmaps["Adopters BEFORE"]
-    after = heatmaps["Adopters AFTER"]
+        sns.heatmap(
+            after,
+            cmap="YlOrRd",
+            vmin=0,
+            vmax=vmax,
+            ax=axes[1, 0],
+            cbar_kws={"label": cbar_label}
+        )
+        axes[1, 0].set_title("Adopters AFTER")
 
-    diff = after - before
+        sns.heatmap(
+            diff,
+            cmap="coolwarm",
+            center=0,
+            vmin=-diff_max,
+            vmax=diff_max,
+            ax=axes[1, 1],
+            cbar_kws={"label": diff_label}
+        )
+        axes[1, 1].set_title("Difference (After − Before)")
 
-    # same color scale for comparison
-    vmax = max(
-        never.max().max(),
-        before.max().max(),
-        after.max().max()
-    )
+        for ax in axes.flat:
+            ax.set_xlabel("Hour")
+            ax.set_ylabel("Month")
 
-    diff_max = abs(diff).max().max()
+        title_map = {
+            "all": f"Peak Consumption Heatmap - {mode.upper()} (Overall Peaks)",
+            "high": f"Peak Consumption Heatmap - {mode.upper()} (High Price Period Peaks)",
+            "low": f"Peak Consumption Heatmap - {mode.upper()} (Low Price Period Peaks)"
+        }
 
-    fig, axes = plt.subplots(2,2, figsize=(14,10))
-    title_map = {
-        "all": "Peak Consumption Heatmap (Overall Peaks)",
-        "high": "Peak Consumption Heatmap (High Price Period Peaks)",
-        "low": "Peak Consumption Heatmap (Low Price Period Peaks)"
-    }
-
-    fig.suptitle(title_map.get(price_label, "Peak Consumption Heatmap"), fontsize=16, y=1.02)
-
-    sns.heatmap(never, cmap="YlOrRd", vmin=0, vmax=vmax, ax=axes[0,0])
-    axes[0,0].set_title("Never adopters")
-
-    sns.heatmap(before, cmap="YlOrRd", vmin=0, vmax=vmax, ax=axes[0,1])
-    axes[0,1].set_title("Adopters BEFORE")
-
-    sns.heatmap(after, cmap="YlOrRd", vmin=0, vmax=vmax, ax=axes[1,0])
-    axes[1,0].set_title("Adopters AFTER")
-
-    sns.heatmap(diff, cmap="coolwarm", center=0,
-                vmin=-diff_max, vmax=diff_max,
-                ax=axes[1,1])
-    axes[1,1].set_title("Difference (After − Before)")
-
-    for ax in axes.flat:
-        ax.set_xlabel("Hour")
-        ax.set_ylabel("Month")
-
-    plt.tight_layout()
-    plt.show()
+        # fig.suptitle(
+        #     title_map.get(price_label, f"Peak Consumption Heatmap - {mode.upper()}"),
+        #     fontsize=16,
+        #     y=1.02
+        # )
+        fig.suptitle(title_map.get(price_label, "Peak Consumption Heatmap"), fontsize=16, y=1.02)
+        plt.tight_layout()
+        plt.show()
