@@ -190,15 +190,21 @@ def plot_peak_rank_boxplot(df):
 # Tariff peak count heatmap
 # =====================================================
 
+# =====================================================
+# Tariff peak count heatmap
+# =====================================================
+
 def plot_tariff_peak_heatmap(df, price_label="all"):
 
     df = df.copy()
 
     never = df[df["tariff_start"].isna()]
+
     before = df[
         (df["tariff_start"].notna()) &
         (df["tariff_active"] == 0)
     ]
+
     after = df[df["tariff_active"] == 1]
 
     groups = {
@@ -226,6 +232,7 @@ def plot_tariff_peak_heatmap(df, price_label="all"):
     all_hours = list(range(24))
 
     for key in heatmaps:
+
         heatmaps[key] = heatmaps[key].reindex(
             index=all_months,
             columns=all_hours,
@@ -238,40 +245,67 @@ def plot_tariff_peak_heatmap(df, price_label="all"):
 
     diff = after - before
 
-    vmax = _safe_max(never, before, after)
+    # =====================================================
+    # Separate color scales
+    # =====================================================
+
+    vmax_never = _safe_max(never)
+
+    # BEFORE and AFTER share same scale
+    vmax_adopters = _safe_max(before, after)
+
     diff_max = _safe_abs_max(diff)
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+    # -----------------------------------------------------
+    # Never adopters
+    # -----------------------------------------------------
 
     sns.heatmap(
         never,
         cmap="YlOrRd",
         vmin=0,
-        vmax=vmax,
+        vmax=vmax_never,
         ax=axes[0, 0],
         cbar_kws={"label": "Peak count"}
     )
+
     axes[0, 0].set_title("Never adopters")
+
+    # -----------------------------------------------------
+    # BEFORE
+    # -----------------------------------------------------
 
     sns.heatmap(
         before,
         cmap="YlOrRd",
         vmin=0,
-        vmax=vmax,
+        vmax=vmax_adopters,
         ax=axes[0, 1],
         cbar_kws={"label": "Peak count"}
     )
+
     axes[0, 1].set_title("Adopters BEFORE")
+
+    # -----------------------------------------------------
+    # AFTER
+    # -----------------------------------------------------
 
     sns.heatmap(
         after,
         cmap="YlOrRd",
         vmin=0,
-        vmax=vmax,
+        vmax=vmax_adopters,
         ax=axes[1, 0],
         cbar_kws={"label": "Peak count"}
     )
+
     axes[1, 0].set_title("Adopters AFTER")
+
+    # -----------------------------------------------------
+    # Difference
+    # -----------------------------------------------------
 
     sns.heatmap(
         diff,
@@ -282,7 +316,12 @@ def plot_tariff_peak_heatmap(df, price_label="all"):
         ax=axes[1, 1],
         cbar_kws={"label": "After − Before peak count"}
     )
+
     axes[1, 1].set_title("Difference (After − Before)")
+
+    # -----------------------------------------------------
+    # Labels
+    # -----------------------------------------------------
 
     for ax in axes.flat:
         ax.set_xlabel("Hour")
