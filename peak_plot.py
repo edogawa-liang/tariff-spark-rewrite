@@ -347,6 +347,10 @@ def plot_tariff_peak_heatmap(df, price_label="all"):
 # Tariff peak consumption heatmap
 # =====================================================
 
+# =====================================================
+# Tariff peak consumption heatmap
+# =====================================================
+
 def plot_tariff_consumption_heatmap(df, price_label="all", modes=("sum", "mean")):
     """
     Automatically plots both:
@@ -362,10 +366,12 @@ def plot_tariff_consumption_heatmap(df, price_label="all", modes=("sum", "mean")
         df_work = df.copy()
 
         never = df_work[df_work["tariff_start"].isna()]
+
         before = df_work[
             (df_work["tariff_start"].notna()) &
             (df_work["tariff_active"] == 0)
         ]
+
         after = df_work[df_work["tariff_active"] == 1]
 
         groups = {
@@ -394,6 +400,7 @@ def plot_tariff_consumption_heatmap(df, price_label="all", modes=("sum", "mean")
         all_hours = list(range(24))
 
         for key in heatmaps:
+
             heatmaps[key] = heatmaps[key].reindex(
                 index=all_months,
                 columns=all_hours,
@@ -406,47 +413,82 @@ def plot_tariff_consumption_heatmap(df, price_label="all", modes=("sum", "mean")
 
         diff = after - before
 
-        vmax = _safe_max(never, before, after)
+        # =====================================================
+        # Separate scales
+        # =====================================================
+
+        # Never adopters use own scale
+        vmax_never = _safe_max(never)
+
+        # BEFORE and AFTER share same scale
+        vmax_adopters = _safe_max(before, after)
+
         diff_max = _safe_abs_max(diff)
 
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
+        # =====================================================
+        # Labels
+        # =====================================================
+
         if mode == "sum":
+
             cbar_label = "Total Peak Consumption (kWh)"
             diff_label = "After − Before total peak consumption"
+
         else:
+
             cbar_label = "Average Peak Consumption (kWh)"
             diff_label = "After − Before average peak consumption"
+
+        # =====================================================
+        # Never adopters
+        # =====================================================
 
         sns.heatmap(
             never,
             cmap="YlOrRd",
             vmin=0,
-            vmax=vmax,
+            vmax=vmax_never,
             ax=axes[0, 0],
             cbar_kws={"label": cbar_label}
         )
+
         axes[0, 0].set_title("Never adopters")
+
+        # =====================================================
+        # BEFORE
+        # =====================================================
 
         sns.heatmap(
             before,
             cmap="YlOrRd",
             vmin=0,
-            vmax=vmax,
+            vmax=vmax_adopters,
             ax=axes[0, 1],
             cbar_kws={"label": cbar_label}
         )
+
         axes[0, 1].set_title("Adopters BEFORE")
+
+        # =====================================================
+        # AFTER
+        # =====================================================
 
         sns.heatmap(
             after,
             cmap="YlOrRd",
             vmin=0,
-            vmax=vmax,
+            vmax=vmax_adopters,
             ax=axes[1, 0],
             cbar_kws={"label": cbar_label}
         )
+
         axes[1, 0].set_title("Adopters AFTER")
+
+        # =====================================================
+        # Difference
+        # =====================================================
 
         sns.heatmap(
             diff,
@@ -457,9 +499,15 @@ def plot_tariff_consumption_heatmap(df, price_label="all", modes=("sum", "mean")
             ax=axes[1, 1],
             cbar_kws={"label": diff_label}
         )
+
         axes[1, 1].set_title("Difference (After − Before)")
 
+        # =====================================================
+        # Axis labels
+        # =====================================================
+
         for ax in axes.flat:
+
             ax.set_xlabel("Hour")
             ax.set_ylabel("Month")
 
@@ -469,11 +517,11 @@ def plot_tariff_consumption_heatmap(df, price_label="all", modes=("sum", "mean")
             "low": f"Peak Consumption Heatmap - {mode.upper()} (Low Price Period Peaks)"
         }
 
-        # fig.suptitle(
-        #     title_map.get(price_label, f"Peak Consumption Heatmap - {mode.upper()}"),
-        #     fontsize=16,
-        #     y=1.02
-        # )
-        fig.suptitle(title_map.get(price_label, "Peak Consumption Heatmap"), fontsize=16, y=1.02)
+        fig.suptitle(
+            title_map.get(price_label, "Peak Consumption Heatmap"),
+            fontsize=16,
+            y=1.02
+        )
+
         plt.tight_layout()
         plt.show()
