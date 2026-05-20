@@ -57,39 +57,52 @@ def _safe_abs_max(df):
     return m if pd.notna(m) else 0
 
 
-def _round_up_to_step(value, step):
+def _nice_upper_limit(value):
     """
-    Round a positive scale limit up to the nearest tick step.
-    This makes colorbar ticks look consistent across panels.
-    """
-    if step is None or step <= 0:
-        return value
+    Round the colorbar maximum up to a readable value.
 
+    This avoids colorbars such as 0, 1.97, 3.94, ... and prevents too many
+    tick labels from being printed when the maximum is large.
+    """
     if value is None or pd.isna(value):
-        return step
+        return 1
 
     value = float(value)
     if value <= 0:
-        return step
+        return 1
 
-    return np.ceil(value / step) * step
+    magnitude = 10 ** np.floor(np.log10(value))
+    normalized = value / magnitude
+
+    if normalized <= 1:
+        nice = 1
+    elif normalized <= 2:
+        nice = 2
+    elif normalized <= 5:
+        nice = 5
+    else:
+        nice = 10
+
+    return nice * magnitude
 
 
-def _make_nonnegative_ticks(vmax, step=2):
+def _make_nonnegative_ticks(vmax, n_ticks=5):
     """
-    Create fixed ticks for non-negative heatmaps, e.g. 0, 2, 4, 6, 8.
+    Create a small, fixed number of readable ticks for non-negative heatmaps.
+
+    Example: 0, 2, 4, 6, 8 or 0, 2.5, 5, 7.5, 10.
+    The key point is that all comparable panels receive the same tick values,
+    without overcrowding the colorbar.
     """
-    vmax = _round_up_to_step(vmax, step)
-    return np.arange(0, vmax + step * 0.5, step)
+    vmax = _nice_upper_limit(vmax)
+    return np.linspace(0, vmax, n_ticks)
 
 
 def _make_centered_ticks(vmax, n_ticks=5):
     """
-    Create symmetric ticks for difference heatmaps centered at zero.
+    Create a small, fixed number of symmetric ticks for difference heatmaps.
     """
-    vmax = float(vmax)
-    if vmax <= 0 or pd.isna(vmax):
-        vmax = 1
+    vmax = _nice_upper_limit(vmax)
     return np.linspace(-vmax, vmax, n_ticks)
 
 
@@ -377,7 +390,7 @@ def plot_peak_rank_boxplot(df):
 # Tariff peak count heatmap
 # =====================================================
 
-def plot_tariff_peak_heatmap(df, price_label="all", count_tick_step=2):
+def plot_tariff_peak_heatmap(df, price_label="all", count_tick_count=5):
 
     df = df.copy()
 
@@ -434,8 +447,8 @@ def plot_tariff_peak_heatmap(df, price_label="all", count_tick_step=2):
 
     # One common scale for all three count panels.
     count_vmax = _safe_max(never, before, after)
-    count_vmax = _round_up_to_step(count_vmax, count_tick_step)
-    count_ticks = _make_nonnegative_ticks(count_vmax, count_tick_step)
+    count_vmax = _nice_upper_limit(count_vmax)
+    count_ticks = _make_nonnegative_ticks(count_vmax, n_ticks=count_tick_count)
 
     diff_max = _safe_abs_max(diff)
     diff_ticks = _make_centered_ticks(diff_max, n_ticks=5)
@@ -542,7 +555,7 @@ def plot_tariff_consumption_heatmap(
     consumption_vmax=None,
     diff_vmax=None,
     difference_scale="local",
-    consumption_tick_step=2,
+    consumption_tick_count=5,
     diff_tick_count=5
 ):
     """
@@ -590,9 +603,9 @@ def plot_tariff_consumption_heatmap(
         "common" means diff_vmax should be supplied, usually from
         get_tariff_consumption_color_scales(..., include_difference=True).
 
-    consumption_tick_step : int or float
-        Fixed tick interval for the three consumption colorbars.
-        Default is 2, so the colorbars show 0, 2, 4, 6, 8, ...
+    consumption_tick_count : int
+        Number of ticks shown on the three consumption colorbars.
+        Default is 5, which keeps the legend readable and consistent across panels.
 
     diff_tick_count : int
         Number of ticks shown on the difference colorbar.
@@ -635,17 +648,16 @@ def plot_tariff_consumption_heatmap(
             this_diff_vmax = 1
 
         # Fixed colorbar ticks.
-        # The consumption vmax is rounded up to the tick interval so all three
-        # consumption colorbars show the same tick labels.
-        this_consumption_vmax = _round_up_to_step(
-            this_consumption_vmax,
-            consumption_tick_step
-        )
+        # Instead of forcing a tiny interval such as every 2 units, we show a
+        # small fixed number of ticks. This keeps the legend readable even when
+        # the scale is large.
+        this_consumption_vmax = _nice_upper_limit(this_consumption_vmax)
         consumption_ticks = _make_nonnegative_ticks(
             this_consumption_vmax,
-            consumption_tick_step
+            n_ticks=consumption_tick_count
         )
 
+        this_diff_vmax = _nice_upper_limit(this_diff_vmax)
         diff_ticks = _make_centered_ticks(
             this_diff_vmax,
             n_ticks=diff_tick_count
