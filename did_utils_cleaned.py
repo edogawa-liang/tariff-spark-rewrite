@@ -649,35 +649,16 @@ def save_results(
 def plot_event_study(
     event_results_df,
     outcome_col,
-    title=None,
+    title="Dynamic Treatment Effect",
     save_path=None,
     filename="dynamic_effect.png",
 ):
-    """
-    Plot overall dynamic DID / event-study effect.
-
-    This function keeps the original name:
-        plot_event_study(...)
-
-    It both shows the figure and optionally saves it.
-    """
-
-    d = event_results_df[
-        event_results_df["outcome"] == outcome_col
-    ].copy()
-
+    d = event_results_df[event_results_df["outcome"] == outcome_col].copy()
     d = d.sort_values("event_time")
-
-    if d.empty:
-        raise ValueError(f"No event-study results found for outcome: {outcome_col}")
 
     fig, ax = plt.subplots(figsize=(9, 5))
 
-    ax.plot(
-        d["event_time"],
-        d["coef"],
-        linewidth=2,
-    )
+    ax.plot(d["event_time"], d["coef"], marker="o", linewidth=2)
 
     ax.fill_between(
         d["event_time"],
@@ -689,22 +670,17 @@ def plot_event_study(
     ax.axhline(0, linestyle="--", linewidth=1)
     ax.axvline(0, linestyle="--", linewidth=1)
 
+    ax.set_title(title)
     ax.set_xlabel("Event Time")
     ax.set_ylabel("Treatment Effect")
-    ax.set_title(title if title is not None else f"Event-study: {outcome_col}")
 
     fig.tight_layout()
 
     if save_path is not None:
         os.makedirs(save_path, exist_ok=True)
-        fig.savefig(
-            os.path.join(save_path, filename),
-            dpi=300,
-            bbox_inches="tight",
-        )
+        fig.savefig(os.path.join(save_path, filename), dpi=300, bbox_inches="tight")
 
     plt.show()
-
     return fig, ax
 
 
@@ -712,27 +688,14 @@ def plot_event_study_by_cohort(
     cohort_event_results_df,
     outcome_col,
     cohorts=None,
-    title=None,
     save_path=None,
 ):
-    """
-    Plot one cohort-specific dynamic DID / event-study figure per cohort.
-
-    This function keeps the original name:
-        plot_event_study_by_cohort(...)
-
-    It shows every cohort figure and optionally saves every figure.
-    """
-
     d0 = cohort_event_results_df[
         cohort_event_results_df["outcome"] == outcome_col
     ].copy()
 
     if cohorts is not None:
         d0 = d0[d0["cohort"].isin(cohorts)]
-
-    if d0.empty:
-        raise ValueError(f"No cohort event-study results found for outcome: {outcome_col}")
 
     if save_path is not None:
         os.makedirs(save_path, exist_ok=True)
@@ -746,11 +709,7 @@ def plot_event_study_by_cohort(
 
         fig, ax = plt.subplots(figsize=(7, 4.5))
 
-        ax.plot(
-            d["event_time"],
-            d["coef"],
-            linewidth=2,
-        )
+        ax.plot(d["event_time"], d["coef"], marker="o", linewidth=2)
 
         ax.fill_between(
             d["event_time"],
@@ -762,12 +721,9 @@ def plot_event_study_by_cohort(
         ax.axhline(0, linestyle="--", linewidth=1)
         ax.axvline(0, linestyle="--", linewidth=1)
 
+        ax.set_title(f"Cohort = {cohort}")
         ax.set_xlabel("Event Time")
         ax.set_ylabel("Treatment Effect")
-        ax.set_title(
-            title if title is not None
-            else f"Event-study: Cohort = {cohort}"
-        )
 
         fig.tight_layout()
 
@@ -780,7 +736,6 @@ def plot_event_study_by_cohort(
             )
 
         plt.show()
-
         figures[cohort] = (fig, ax)
 
     return figures
@@ -793,21 +748,12 @@ def plot_all_cohorts(
     save_path=None,
     filename="dynamic_all_cohorts.png",
 ):
-    """
-    Plot all cohort-specific dynamic effects in one figure.
-
-    It both shows the figure and optionally saves it.
-    """
-
     d0 = cohort_event_results_df[
         cohort_event_results_df["outcome"] == outcome_col
     ].copy()
 
     if cohorts is not None:
         d0 = d0[d0["cohort"].isin(cohorts)]
-
-    if d0.empty:
-        raise ValueError(f"No cohort event-study results found for outcome: {outcome_col}")
 
     fig, ax = plt.subplots(figsize=(9, 5))
 
@@ -819,6 +765,7 @@ def plot_all_cohorts(
         ax.plot(
             d["event_time"],
             d["coef"],
+            marker="o",
             alpha=0.6,
             linewidth=2,
             label=str(cohort),
@@ -829,26 +776,17 @@ def plot_all_cohorts(
 
     ax.set_xlabel("Event Time")
     ax.set_ylabel("Treatment Effect")
-    ax.set_title("Dynamic Treatment Effect by Cohort")
+    ax.set_title("Dynamic Effect by Cohort")
 
-    ax.legend(
-        title="Cohort",
-        bbox_to_anchor=(1.05, 1),
-        loc="upper left",
-    )
+    ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
 
     fig.tight_layout()
 
     if save_path is not None:
         os.makedirs(save_path, exist_ok=True)
-        fig.savefig(
-            os.path.join(save_path, filename),
-            dpi=300,
-            bbox_inches="tight",
-        )
+        fig.savefig(os.path.join(save_path, filename), dpi=300, bbox_inches="tight")
 
     plt.show()
-
     return fig, ax
 
 
