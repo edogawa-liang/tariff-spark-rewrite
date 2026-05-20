@@ -56,6 +56,152 @@ def _safe_abs_max(df):
     return m if pd.notna(m) else 0
 
 
+
+def _resolve_scale(scale, mode):
+    """
+    Accept either a scalar scale or a dictionary such as {"mean": 9.5, "sum": 1000}.
+    """
+    if isinstance(scale, dict):
+        return scale.get(mode)
+    return scale
+
+
+def _split_tariff_groups(df):
+    """
+    Split data into never adopters, adopters before tariff, and adopters after tariff.
+    """
+    df_work = df.copy()
+
+    return {
+        "Never adopters": df_work[df_work["tariff_start"].isna()],
+        "Adopters BEFORE": df_work[
+            (df_work["tariff_start"].notna()) &
+            (df_work["tariff_active"] == 0)
+        ],
+        "Adopters AFTER": df_work[df_work["tariff_active"] == 1]
+    }
+
+
+def _make_tariff_consumption_heatmaps(df, mode="mean", months=None, hours=None):
+    """
+    Build tariff-group heatmaps for peak consumption.
+
+    mode:
+        mean -> average peak consumption in each month-hour cell
+        sum  -> total peak consumption in each month-hour cell
+
+    Note: for descriptive before/after comparisons with staggered adoption,
+    mean is usually preferred because sum is mechanically affected by the
+    number of observations in each month-hour cell.
+    """
+    if mode not in ["sum", "mean"]:
+        raise ValueError("mode must be 'sum' or 'mean'")
+
+    groups = _split_tariff_groups(df)
+    heatmaps = {}
+
+    for name, subset in groups.items():
+        temp = _extract_peak_long(subset)
+
+        heatmap = temp.pivot_table(
+            index="month",
+            columns="hour",
+            values="consumption",
+            aggfunc=mode,
+            fill_value=0 if mode == "sum" else None
+        )
+
+        heatmaps[name] = heatmap
+
+    if months is None:
+        months = sorted(set().union(*[set(h.index) for h in heatmaps.values()]))
+    if hours is None:
+        hours = list(range(24))
+
+    for key in heatmaps:
+        heatmaps[key] = heatmaps[key].reindex(
+            index=months,
+            columns=hours,
+            fill_value=0 if mode == "sum" else None
+        )
+
+    heatmaps["Difference (After − Before)"] = (
+        heatmaps["Adopters AFTER"] - heatmaps["Adopters BEFORE"]
+    )
+
+    return heatmaps
+
+
+def get_tariff_consumption_color_scales(*dfs, modes=("mean",), include_difference=False):
+    """
+    Compute common color scales across multiple datasets / pricing periods.
+
+    Use this when plotting Figure 10, Figure 11, and Figure 12 separately but
+    you want their consumption panels to share the same color scale.
+
+    Returns
+    -------
+    dict
+        {
+            "consumption_vmax": {mode: value},
+            "diff_vmax": {mode: value}   # only meaningful if include_difference=True
+        }
+
+    Example
+    -------
+    scales = get_tariff_consumption_color_scales(
+        df_high, df_low, df_all,
+        modes=("mean",),
+        include_difference=False
+    )
+
+    plot_tariff_consumption_heatmap(
+        df_high,
+        price_label="high",
+        modes=("mean",),
+        consumption_vmax=scales["consumption_vmax"]
+    )
+    """
+    if not dfs:
+        raise ValueError("At least one dataframe must be provided")
+
+    consumption_vmax = {}
+    diff_vmax = {}
+
+    for mode in modes:
+        if mode not in ["sum", "mean"]:
+            raise ValueError("modes must contain only 'sum' or 'mean'")
+
+        consumption_max_candidates = []
+        diff_max_candidates = []
+
+        for df in dfs:
+            heatmaps = _make_tariff_consumption_heatmaps(df, mode=mode)
+
+            # Common scale for the three consumption panels:
+            # Never adopters, Adopters BEFORE, and Adopters AFTER.
+            consumption_max_candidates.append(
+                _safe_max(
+                    heatmaps["Never adopters"],
+                    heatmaps["Adopters BEFORE"],
+                    heatmaps["Adopters AFTER"]
+                )
+            )
+
+            if include_difference:
+                diff_max_candidates.append(
+                    _safe_abs_max(heatmaps["Difference (After − Before)"])
+                )
+
+        consumption_vmax[mode] = max(consumption_max_candidates) if consumption_max_candidates else 0
+        diff_vmax[mode] = max(diff_max_candidates) if diff_max_candidates else None
+
+    return {
+        "consumption_vmax": consumption_vmax,
+        "diff_vmax": diff_vmax
+    }
+
+
 # =====================================================
 # Peak hour distribution
 # =====================================================
@@ -351,79 +497,94 @@ def plot_tariff_peak_heatmap(df, price_label="all"):
 # Tariff peak consumption heatmap
 # =====================================================
 
-def plot_tariff_consumption_heatmap(df, price_label="all", modes=("sum", "mean")):
+def plot_tariff_consumption_heatmap(
+    df,
+    price_label="all",
+    modes=("mean",),
+    consumption_vmax=None,
+    diff_vmax=None,
+    difference_scale="local"
+):
     """
-    Automatically plots both:
-        sum  -> total peak consumption / burden
-        mean -> average peak size / conditional intensity
+    Plot tariff peak consumption heatmaps.
+
+    Recommended use for the main text:
+        mode = "mean"
+
+    Color-scale logic:
+        - The three consumption panels use the SAME scale:
+          Never adopters, Adopters BEFORE, and Adopters AFTER.
+        - The difference panel uses a separate diverging scale centered at zero.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Dataset containing tariff_start, tariff_active, peak time, and peak consumption columns.
+
+    price_label : {"all", "high", "low"}
+        Used only for the figure title.
+
+    modes : tuple/list of {"mean", "sum"}
+        "mean" is recommended for descriptive before/after comparison.
+        "sum" is available only if you explicitly want total aggregate burden.
+
+    consumption_vmax : None, scalar, or dict
+        If None, the three consumption panels share a local scale within this figure.
+        If scalar, that value is used as vmax for all modes.
+        If dict, use format {"mean": value, "sum": value}.
+
+        To make Figures 10, 11, and 12 comparable, first run:
+            scales = get_tariff_consumption_color_scales(
+                df_high, df_low, df_all,
+                modes=("mean",)
+            )
+        Then pass:
+            consumption_vmax=scales["consumption_vmax"]
+
+    diff_vmax : None, scalar, or dict
+        Optional vmax for the difference panel. If None, the difference panel
+        uses its own local symmetric scale around zero.
+
+    difference_scale : {"local", "common"}
+        "local" means each figure's difference panel is scaled separately.
+        "common" means diff_vmax should be supplied, usually from
+        get_tariff_consumption_color_scales(..., include_difference=True).
     """
+
+    if difference_scale not in ["local", "common"]:
+        raise ValueError("difference_scale must be 'local' or 'common'")
 
     for mode in modes:
 
         if mode not in ["sum", "mean"]:
             raise ValueError("modes must contain only 'sum' or 'mean'")
 
-        df_work = df.copy()
-
-        never = df_work[df_work["tariff_start"].isna()]
-
-        before = df_work[
-            (df_work["tariff_start"].notna()) &
-            (df_work["tariff_active"] == 0)
-        ]
-
-        after = df_work[df_work["tariff_active"] == 1]
-
-        groups = {
-            "Never adopters": never,
-            "Adopters BEFORE": before,
-            "Adopters AFTER": after
-        }
-
-        heatmaps = {}
-
-        for name, subset in groups.items():
-
-            temp = _extract_peak_long(subset)
-
-            heatmap = temp.pivot_table(
-                index="month",
-                columns="hour",
-                values="consumption",
-                aggfunc=mode,
-                fill_value=0 if mode == "sum" else None
-            )
-
-            heatmaps[name] = heatmap
-
-        all_months = sorted(set().union(*[set(h.index) for h in heatmaps.values()]))
-        all_hours = list(range(24))
-
-        for key in heatmaps:
-
-            heatmaps[key] = heatmaps[key].reindex(
-                index=all_months,
-                columns=all_hours,
-                fill_value=0 if mode == "sum" else None
-            )
+        heatmaps = _make_tariff_consumption_heatmaps(df, mode=mode)
 
         never = heatmaps["Never adopters"]
         before = heatmaps["Adopters BEFORE"]
         after = heatmaps["Adopters AFTER"]
-
-        diff = after - before
+        diff = heatmaps["Difference (After − Before)"]
 
         # =====================================================
-        # Separate scales
+        # Color scales
         # =====================================================
 
-        # Never adopters use own scale
-        vmax_never = _safe_max(never)
+        # One common scale for ALL THREE consumption panels.
+        this_consumption_vmax = _resolve_scale(consumption_vmax, mode)
+        if this_consumption_vmax is None:
+            this_consumption_vmax = _safe_max(never, before, after)
 
-        # BEFORE and AFTER share same scale
-        vmax_adopters = _safe_max(before, after)
+        # Difference panel: separate diverging scale centered at zero.
+        this_diff_vmax = _resolve_scale(diff_vmax, mode)
+        if difference_scale == "local" or this_diff_vmax is None:
+            this_diff_vmax = _safe_abs_max(diff)
 
-        diff_max = _safe_abs_max(diff)
+        # Avoid matplotlib warnings when all values are zero or missing.
+        if this_consumption_vmax == 0:
+            this_consumption_vmax = 1
+        if this_diff_vmax == 0:
+            this_diff_vmax = 1
 
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
@@ -432,74 +593,59 @@ def plot_tariff_consumption_heatmap(df, price_label="all", modes=("sum", "mean")
         # =====================================================
 
         if mode == "sum":
-
             cbar_label = "Total Peak Consumption (kWh)"
             diff_label = "After − Before total peak consumption"
-
         else:
-
             cbar_label = "Average Peak Consumption (kWh)"
             diff_label = "After − Before average peak consumption"
 
         # =====================================================
-        # Never adopters
+        # Consumption panels: shared scale
         # =====================================================
 
         sns.heatmap(
             never,
             cmap="YlOrRd",
             vmin=0,
-            vmax=vmax_never,
+            vmax=this_consumption_vmax,
             ax=axes[0, 0],
             cbar_kws={"label": cbar_label}
         )
-
         axes[0, 0].set_title("Never adopters")
-
-        # =====================================================
-        # BEFORE
-        # =====================================================
 
         sns.heatmap(
             before,
             cmap="YlOrRd",
             vmin=0,
-            vmax=vmax_adopters,
+            vmax=this_consumption_vmax,
             ax=axes[0, 1],
             cbar_kws={"label": cbar_label}
         )
-
         axes[0, 1].set_title("Adopters BEFORE")
-
-        # =====================================================
-        # AFTER
-        # =====================================================
 
         sns.heatmap(
             after,
             cmap="YlOrRd",
             vmin=0,
-            vmax=vmax_adopters,
+            vmax=this_consumption_vmax,
             ax=axes[1, 0],
             cbar_kws={"label": cbar_label}
         )
-
         axes[1, 0].set_title("Adopters AFTER")
 
         # =====================================================
-        # Difference
+        # Difference panel: separate diverging scale
         # =====================================================
 
         sns.heatmap(
             diff,
             cmap="coolwarm",
             center=0,
-            vmin=-diff_max,
-            vmax=diff_max,
+            vmin=-this_diff_vmax,
+            vmax=this_diff_vmax,
             ax=axes[1, 1],
             cbar_kws={"label": diff_label}
         )
-
         axes[1, 1].set_title("Difference (After − Before)")
 
         # =====================================================
@@ -507,7 +653,6 @@ def plot_tariff_consumption_heatmap(df, price_label="all", modes=("sum", "mean")
         # =====================================================
 
         for ax in axes.flat:
-
             ax.set_xlabel("Hour")
             ax.set_ylabel("Month")
 
