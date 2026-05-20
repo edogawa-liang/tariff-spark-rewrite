@@ -1,0 +1,2 @@
+outcome,coef,std_error,p_value,ci_lower,ci_upper,n_obs,n_entities
+top3_mean_consumption,-0.8334990689,0.0396370284,3.614181579e-98,-0.9111876446,-0.7558104932,166773,9875
