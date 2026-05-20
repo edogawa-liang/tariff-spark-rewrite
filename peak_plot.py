@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -54,6 +55,42 @@ def _safe_abs_max(df):
         return 0
     m = df.abs().max().max()
     return m if pd.notna(m) else 0
+
+
+def _round_up_to_step(value, step):
+    """
+    Round a positive scale limit up to the nearest tick step.
+    This makes colorbar ticks look consistent across panels.
+    """
+    if step is None or step <= 0:
+        return value
+
+    if value is None or pd.isna(value):
+        return step
+
+    value = float(value)
+    if value <= 0:
+        return step
+
+    return np.ceil(value / step) * step
+
+
+def _make_nonnegative_ticks(vmax, step=2):
+    """
+    Create fixed ticks for non-negative heatmaps, e.g. 0, 2, 4, 6, 8.
+    """
+    vmax = _round_up_to_step(vmax, step)
+    return np.arange(0, vmax + step * 0.5, step)
+
+
+def _make_centered_ticks(vmax, n_ticks=5):
+    """
+    Create symmetric ticks for difference heatmaps centered at zero.
+    """
+    vmax = float(vmax)
+    if vmax <= 0 or pd.isna(vmax):
+        vmax = 1
+    return np.linspace(-vmax, vmax, n_ticks)
 
 
 
@@ -340,7 +377,7 @@ def plot_peak_rank_boxplot(df):
 # Tariff peak count heatmap
 # =====================================================
 
-def plot_tariff_peak_heatmap(df, price_label="all"):
+def plot_tariff_peak_heatmap(df, price_label="all", count_tick_step=2):
 
     df = df.copy()
 
@@ -392,15 +429,16 @@ def plot_tariff_peak_heatmap(df, price_label="all"):
     diff = after - before
 
     # =====================================================
-    # Separate color scales
+    # Color scales and fixed colorbar ticks
     # =====================================================
 
-    vmax_never = _safe_max(never)
-
-    # BEFORE and AFTER share same scale
-    vmax_adopters = _safe_max(before, after)
+    # One common scale for all three count panels.
+    count_vmax = _safe_max(never, before, after)
+    count_vmax = _round_up_to_step(count_vmax, count_tick_step)
+    count_ticks = _make_nonnegative_ticks(count_vmax, count_tick_step)
 
     diff_max = _safe_abs_max(diff)
+    diff_ticks = _make_centered_ticks(diff_max, n_ticks=5)
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
@@ -412,9 +450,9 @@ def plot_tariff_peak_heatmap(df, price_label="all"):
         never,
         cmap="YlOrRd",
         vmin=0,
-        vmax=vmax_never,
+        vmax=count_vmax,
         ax=axes[0, 0],
-        cbar_kws={"label": "Peak count"}
+        cbar_kws={"label": "Peak count", "ticks": count_ticks}
     )
 
     axes[0, 0].set_title("Never adopters")
@@ -427,9 +465,9 @@ def plot_tariff_peak_heatmap(df, price_label="all"):
         before,
         cmap="YlOrRd",
         vmin=0,
-        vmax=vmax_adopters,
+        vmax=count_vmax,
         ax=axes[0, 1],
-        cbar_kws={"label": "Peak count"}
+        cbar_kws={"label": "Peak count", "ticks": count_ticks}
     )
 
     axes[0, 1].set_title("Adopters BEFORE")
@@ -442,9 +480,9 @@ def plot_tariff_peak_heatmap(df, price_label="all"):
         after,
         cmap="YlOrRd",
         vmin=0,
-        vmax=vmax_adopters,
+        vmax=count_vmax,
         ax=axes[1, 0],
-        cbar_kws={"label": "Peak count"}
+        cbar_kws={"label": "Peak count", "ticks": count_ticks}
     )
 
     axes[1, 0].set_title("Adopters AFTER")
@@ -460,7 +498,7 @@ def plot_tariff_peak_heatmap(df, price_label="all"):
         vmin=-diff_max,
         vmax=diff_max,
         ax=axes[1, 1],
-        cbar_kws={"label": "After − Before peak count"}
+        cbar_kws={"label": "After − Before peak count", "ticks": diff_ticks}
     )
 
     axes[1, 1].set_title("Difference (After − Before)")
@@ -503,7 +541,9 @@ def plot_tariff_consumption_heatmap(
     modes=("mean",),
     consumption_vmax=None,
     diff_vmax=None,
-    difference_scale="local"
+    difference_scale="local",
+    consumption_tick_step=2,
+    diff_tick_count=5
 ):
     """
     Plot tariff peak consumption heatmaps.
@@ -549,6 +589,14 @@ def plot_tariff_consumption_heatmap(
         "local" means each figure's difference panel is scaled separately.
         "common" means diff_vmax should be supplied, usually from
         get_tariff_consumption_color_scales(..., include_difference=True).
+
+    consumption_tick_step : int or float
+        Fixed tick interval for the three consumption colorbars.
+        Default is 2, so the colorbars show 0, 2, 4, 6, 8, ...
+
+    diff_tick_count : int
+        Number of ticks shown on the difference colorbar.
+        Default is 5, so the ticks are symmetric around zero.
     """
 
     if difference_scale not in ["local", "common"]:
@@ -586,6 +634,23 @@ def plot_tariff_consumption_heatmap(
         if this_diff_vmax == 0:
             this_diff_vmax = 1
 
+        # Fixed colorbar ticks.
+        # The consumption vmax is rounded up to the tick interval so all three
+        # consumption colorbars show the same tick labels.
+        this_consumption_vmax = _round_up_to_step(
+            this_consumption_vmax,
+            consumption_tick_step
+        )
+        consumption_ticks = _make_nonnegative_ticks(
+            this_consumption_vmax,
+            consumption_tick_step
+        )
+
+        diff_ticks = _make_centered_ticks(
+            this_diff_vmax,
+            n_ticks=diff_tick_count
+        )
+
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
         # =====================================================
@@ -609,7 +674,7 @@ def plot_tariff_consumption_heatmap(
             vmin=0,
             vmax=this_consumption_vmax,
             ax=axes[0, 0],
-            cbar_kws={"label": cbar_label}
+            cbar_kws={"label": cbar_label, "ticks": consumption_ticks}
         )
         axes[0, 0].set_title("Never adopters")
 
@@ -619,7 +684,7 @@ def plot_tariff_consumption_heatmap(
             vmin=0,
             vmax=this_consumption_vmax,
             ax=axes[0, 1],
-            cbar_kws={"label": cbar_label}
+            cbar_kws={"label": cbar_label, "ticks": consumption_ticks}
         )
         axes[0, 1].set_title("Adopters BEFORE")
 
@@ -629,7 +694,7 @@ def plot_tariff_consumption_heatmap(
             vmin=0,
             vmax=this_consumption_vmax,
             ax=axes[1, 0],
-            cbar_kws={"label": cbar_label}
+            cbar_kws={"label": cbar_label, "ticks": consumption_ticks}
         )
         axes[1, 0].set_title("Adopters AFTER")
 
@@ -644,7 +709,7 @@ def plot_tariff_consumption_heatmap(
             vmin=-this_diff_vmax,
             vmax=this_diff_vmax,
             ax=axes[1, 1],
-            cbar_kws={"label": diff_label}
+            cbar_kws={"label": diff_label, "ticks": diff_ticks}
         )
         axes[1, 1].set_title("Difference (After − Before)")
 
