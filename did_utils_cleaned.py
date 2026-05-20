@@ -643,26 +643,33 @@ def save_results(
 
 
 # ============================================================
-# Plot dynamic effects
+# Plot event-study results
 # ============================================================
 
-def plot_dynamic_effect(
-    event_df,
+def plot_event_study(
+    event_results_df,
     outcome_col,
+    title=None,
     save_path=None,
     filename="dynamic_effect.png",
-    title="Dynamic Treatment Effect",
 ):
     """
-    Plot overall dynamic DID effect:
-    line + confidence interval band.
+    Plot overall dynamic DID / event-study effect.
+
+    This function keeps the original name:
+        plot_event_study(...)
+
+    It both shows the figure and optionally saves it.
     """
 
-    d = event_df[event_df["outcome"] == outcome_col].copy()
+    d = event_results_df[
+        event_results_df["outcome"] == outcome_col
+    ].copy()
+
     d = d.sort_values("event_time")
 
     if d.empty:
-        raise ValueError(f"No dynamic result found for outcome: {outcome_col}")
+        raise ValueError(f"No event-study results found for outcome: {outcome_col}")
 
     fig, ax = plt.subplots(figsize=(9, 5))
 
@@ -684,7 +691,7 @@ def plot_dynamic_effect(
 
     ax.set_xlabel("Event Time")
     ax.set_ylabel("Treatment Effect")
-    ax.set_title(title)
+    ax.set_title(title if title is not None else f"Event-study: {outcome_col}")
 
     fig.tight_layout()
 
@@ -701,31 +708,40 @@ def plot_dynamic_effect(
     return fig, ax
 
 
-def plot_dynamic_by_cohort(
-    cohort_event_df,
+def plot_event_study_by_cohort(
+    cohort_event_results_df,
     outcome_col,
+    cohorts=None,
+    title=None,
     save_path=None,
 ):
     """
-    Plot one dynamic DID figure for each cohort:
-    line + confidence interval band.
+    Plot one cohort-specific dynamic DID / event-study figure per cohort.
+
+    This function keeps the original name:
+        plot_event_study_by_cohort(...)
+
+    It shows every cohort figure and optionally saves every figure.
     """
 
-    d0 = cohort_event_df[
-        cohort_event_df["outcome"] == outcome_col
+    d0 = cohort_event_results_df[
+        cohort_event_results_df["outcome"] == outcome_col
     ].copy()
 
+    if cohorts is not None:
+        d0 = d0[d0["cohort"].isin(cohorts)]
+
     if d0.empty:
-        raise ValueError(f"No cohort dynamic result found for outcome: {outcome_col}")
+        raise ValueError(f"No cohort event-study results found for outcome: {outcome_col}")
 
     if save_path is not None:
         os.makedirs(save_path, exist_ok=True)
 
     figures = {}
 
-    for c in sorted(d0["cohort"].unique()):
+    for cohort in sorted(d0["cohort"].unique()):
 
-        d = d0[d0["cohort"] == c].copy()
+        d = d0[d0["cohort"] == cohort].copy()
         d = d.sort_values("event_time")
 
         fig, ax = plt.subplots(figsize=(7, 4.5))
@@ -746,49 +762,58 @@ def plot_dynamic_by_cohort(
         ax.axhline(0, linestyle="--", linewidth=1)
         ax.axvline(0, linestyle="--", linewidth=1)
 
-        ax.set_title(f"Dynamic Treatment Effect: Cohort = {c}")
         ax.set_xlabel("Event Time")
         ax.set_ylabel("Treatment Effect")
+        ax.set_title(
+            title if title is not None
+            else f"Event-study: Cohort = {cohort}"
+        )
 
         fig.tight_layout()
 
         if save_path is not None:
-            safe_c = str(c).replace("/", "_").replace(":", "_")
+            safe_cohort = str(cohort).replace("/", "_").replace(":", "_")
             fig.savefig(
-                os.path.join(save_path, f"dynamic_cohort_{safe_c}.png"),
+                os.path.join(save_path, f"dynamic_cohort_{safe_cohort}.png"),
                 dpi=300,
                 bbox_inches="tight",
             )
 
         plt.show()
 
-        figures[c] = (fig, ax)
+        figures[cohort] = (fig, ax)
 
     return figures
 
 
 def plot_all_cohorts(
-    cohort_event_df,
+    cohort_event_results_df,
     outcome_col,
+    cohorts=None,
     save_path=None,
     filename="dynamic_all_cohorts.png",
 ):
     """
     Plot all cohort-specific dynamic effects in one figure.
+
+    It both shows the figure and optionally saves it.
     """
 
-    d0 = cohort_event_df[
-        cohort_event_df["outcome"] == outcome_col
+    d0 = cohort_event_results_df[
+        cohort_event_results_df["outcome"] == outcome_col
     ].copy()
 
+    if cohorts is not None:
+        d0 = d0[d0["cohort"].isin(cohorts)]
+
     if d0.empty:
-        raise ValueError(f"No cohort dynamic result found for outcome: {outcome_col}")
+        raise ValueError(f"No cohort event-study results found for outcome: {outcome_col}")
 
     fig, ax = plt.subplots(figsize=(9, 5))
 
-    for c in sorted(d0["cohort"].unique()):
+    for cohort in sorted(d0["cohort"].unique()):
 
-        d = d0[d0["cohort"] == c].copy()
+        d = d0[d0["cohort"] == cohort].copy()
         d = d.sort_values("event_time")
 
         ax.plot(
@@ -796,7 +821,7 @@ def plot_all_cohorts(
             d["coef"],
             alpha=0.6,
             linewidth=2,
-            label=str(c),
+            label=str(cohort),
         )
 
     ax.axhline(0, linestyle="--", linewidth=1)
@@ -828,7 +853,7 @@ def plot_all_cohorts(
 
 
 # ============================================================
-# Save all outputs
+# Save all outputs: CSV + figures
 # ============================================================
 
 def save_all_outputs(
@@ -840,7 +865,13 @@ def save_all_outputs(
     save_path,
 ):
     """
-    Save all CSV results and all dynamic figures.
+    Save all CSV results and show + save all figures.
+
+    This function will:
+        1. save overall_df, cohort_df, event_df, cohort_event_df as CSV
+        2. show and save the overall dynamic event-study figure
+        3. show and save one dynamic figure for each cohort
+        4. show and save one figure with all cohorts together
     """
 
     os.makedirs(save_path, exist_ok=True)
@@ -853,21 +884,21 @@ def save_all_outputs(
         save_path=save_path,
     )
 
-    plot_dynamic_effect(
-        event_df=event_df,
+    plot_event_study(
+        event_results_df=event_df,
         outcome_col=outcome_col,
         save_path=save_path,
         filename="dynamic_effect.png",
     )
 
-    plot_dynamic_by_cohort(
-        cohort_event_df=cohort_event_df,
+    plot_event_study_by_cohort(
+        cohort_event_results_df=cohort_event_df,
         outcome_col=outcome_col,
         save_path=save_path,
     )
 
     plot_all_cohorts(
-        cohort_event_df=cohort_event_df,
+        cohort_event_results_df=cohort_event_df,
         outcome_col=outcome_col,
         save_path=save_path,
         filename="dynamic_all_cohorts.png",
