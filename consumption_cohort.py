@@ -319,3 +319,129 @@ def plot_cohort_panels(
     plt.tight_layout()
 
     return axes
+
+
+
+
+
+def plot_pooled_cohort_panels(
+    df,
+    time_col="TIDPUNKT",
+    value_col="top3_mean_consumption",
+    mode="raw",
+    figsize=(12, 8),
+    dpi=120
+):
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    data = df.copy()
+
+    data[time_col] = pd.to_datetime(data[time_col]).dt.to_period("M")
+    data["tariff_month"] = pd.to_datetime(data["tariff_start"]).dt.to_period("M")
+
+    if mode == "matched":
+        data["cohort"] = pd.to_datetime(data["cohort"].astype(str)).dt.to_period("M")
+
+    color_map = {
+        "control": "tab:blue",
+        "treated": "tab:orange"
+    }
+
+    cohort_groups = {
+        "March adopters": [3],
+        "Apr–Oct adopters": [4, 5, 6, 7, 8, 9, 10],
+        "November adopters": [11],
+        "December adopters": [12],
+    }
+
+    fig, axes = plt.subplots(
+        2, 2,
+        figsize=figsize,
+        dpi=dpi,
+        sharex=True,
+        sharey=True
+    )
+
+    axes = axes.flatten()
+
+    for i, (panel_title, months) in enumerate(cohort_groups.items()):
+
+        ax = axes[i]
+
+        if mode == "raw":
+            treated = data[data["tariff_month"].dt.month.isin(months)]
+            control = data[data["tariff_month"].isna()]
+
+            d = pd.concat([treated, control]).copy()
+
+            d["group"] = np.where(
+                d["tariff_month"].dt.month.isin(months),
+                "treated",
+                "control"
+            )
+
+        elif mode == "matched":
+            d = data[data["cohort"].dt.month.isin(months)].copy()
+
+            d["group"] = d["treatment"].map({
+                1: "treated",
+                0: "control"
+            })
+
+        else:
+            raise ValueError("mode must be 'raw' or 'matched'")
+
+        d = d[d["group"].notna()]
+
+        g = (
+            d.groupby([time_col, "group"])[value_col]
+            .mean()
+            .unstack("group")
+            .sort_index()
+        )
+
+        g = g.reindex(columns=["control", "treated"])
+
+        for grp in ["control", "treated"]:
+            if grp in g.columns and g[grp].notna().any():
+                ax.plot(
+                    g.index.to_timestamp(),
+                    g[grp],
+                    marker="o",
+                    color=color_map[grp],
+                    linewidth=2
+                )
+
+        ax.set_title(panel_title)
+
+        if i in [0, 2]:
+            ax.set_ylabel("Consumption (kWh)")
+
+        ax.tick_params(axis="x", rotation=45)
+
+    if mode == "raw":
+        legend_handles = [
+            Line2D([0], [0], color="tab:blue", marker="o", label="Never adopters"),
+            Line2D([0], [0], color="tab:orange", marker="o", label="Tariff adopters"),
+        ]
+        title = "Before Matching"
+    else:
+        legend_handles = [
+            Line2D([0], [0], color="tab:blue", marker="o", label="Matched controls"),
+            Line2D([0], [0], color="tab:orange", marker="o", label="Tariff adopters"),
+        ]
+        title = "After Matching"
+
+    fig.legend(handles=legend_handles, loc="upper right")
+
+    fig.suptitle(
+        f"Average Peak Consumption by Pooled Adoption Month ({title})",
+        fontsize=16
+    )
+
+    plt.tight_layout()
+
+    return axes
