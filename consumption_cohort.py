@@ -415,6 +415,23 @@ def plot_pooled_cohort_panels(
                     linewidth=2
                 )
 
+        # -------------------------
+        # adoption lines
+        # -------------------------
+        for m in months:
+
+            adoption_date = pd.Period(
+                f"2022-{m:02d}",
+                freq="M"
+            ).to_timestamp()
+
+            ax.axvline(
+                adoption_date,
+                linestyle="--",
+                color="black",
+                alpha=0.4
+            )
+
         ax.set_title(panel_title)
 
         if i in [0, 2]:
