@@ -558,59 +558,7 @@ def plot_tariff_consumption_heatmap(
     consumption_tick_count=5,
     diff_tick_count=5
 ):
-    """
-    Plot tariff peak consumption heatmaps.
 
-    Recommended use for the main text:
-        mode = "mean"
-
-    Color-scale logic:
-        - The three consumption panels use the SAME scale:
-          Never adopters, Adopters BEFORE, and Adopters AFTER.
-        - The difference panel uses a separate diverging scale centered at zero.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        Dataset containing tariff_start, tariff_active, peak time, and peak consumption columns.
-
-    price_label : {"all", "high", "low"}
-        Used only for the figure title.
-
-    modes : tuple/list of {"mean", "sum"}
-        "mean" is recommended for descriptive before/after comparison.
-        "sum" is available only if you explicitly want total aggregate burden.
-
-    consumption_vmax : None, scalar, or dict
-        If None, the three consumption panels share a local scale within this figure.
-        If scalar, that value is used as vmax for all modes.
-        If dict, use format {"mean": value, "sum": value}.
-
-        To make Figures 10, 11, and 12 comparable, first run:
-            scales = get_tariff_consumption_color_scales(
-                df_high, df_low, df_all,
-                modes=("mean",)
-            )
-        Then pass:
-            consumption_vmax=scales["consumption_vmax"]
-
-    diff_vmax : None, scalar, or dict
-        Optional vmax for the difference panel. If None, the difference panel
-        uses its own local symmetric scale around zero.
-
-    difference_scale : {"local", "common"}
-        "local" means each figure's difference panel is scaled separately.
-        "common" means diff_vmax should be supplied, usually from
-        get_tariff_consumption_color_scales(..., include_difference=True).
-
-    consumption_tick_count : int
-        Number of ticks shown on the three consumption colorbars.
-        Default is 5, which keeps the legend readable and consistent across panels.
-
-    diff_tick_count : int
-        Number of ticks shown on the difference colorbar.
-        Default is 5, so the ticks are symmetric around zero.
-    """
 
     if difference_scale not in ["local", "common"]:
         raise ValueError("difference_scale must be 'local' or 'common'")
@@ -747,3 +695,223 @@ def plot_tariff_consumption_heatmap(
 
         plt.tight_layout()
         plt.show()
+
+
+# =====================================================
+# Heatmaps for full / matched / unmatched groups
+# =====================================================
+
+def _make_average_peak_consumption_heatmap(df, months=None, hours=None):
+    """
+    Month × Hour heatmap:
+    E(peak consumption | peak occurs in month m and hour h)
+    """
+
+    temp = _extract_peak_long(df)
+
+    heatmap = temp.pivot_table(
+        index="month",
+        columns="hour",
+        values="consumption",
+        aggfunc="mean"
+    )
+
+    if months is None:
+        months = list(range(1, 13))
+    if hours is None:
+        hours = list(range(24))
+
+    return heatmap.reindex(index=months, columns=hours)
+
+
+def plot_all_households_heatmap(
+    df,
+    price_label="high",
+    consumption_vmax=None,
+    tick_count=5
+):
+    """
+    1×1 heatmap for all households.
+    Input df should already be filtered, e.g. df[df["price"] == "high"].
+    """
+
+    heatmap = _make_average_peak_consumption_heatmap(df)
+
+    if consumption_vmax is None:
+        consumption_vmax = _safe_max(heatmap)
+
+    consumption_vmax = _nice_upper_limit(consumption_vmax)
+    ticks = _make_nonnegative_ticks(consumption_vmax, n_ticks=tick_count)
+
+    plt.figure(figsize=(10, 5))
+
+    sns.heatmap(
+        heatmap,
+        cmap="YlOrRd",
+        vmin=0,
+        vmax=consumption_vmax,
+        cbar_kws={
+            "label": "Average Peak Consumption (kWh)",
+            "ticks": ticks
+        }
+    )
+
+    title_map = {
+        "all": "All Households: Average Peak Consumption (Overall Peaks)",
+        "high": "All Households: Average Peak Consumption (High-Price Period Peaks)",
+        "low": "All Households: Average Peak Consumption (Low-Price Period Peaks)"
+    }
+
+    plt.title(title_map.get(price_label, "All Households: Average Peak Consumption"))
+    plt.xlabel("Hour")
+    plt.ylabel("Month")
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_matching_status_heatmaps(
+    df_full,
+    matched_control_ids,
+    price_label="high",
+    consumption_vmax=None,
+    tick_count=5
+):
+    """
+    1×4 heatmaps:
+        1. All never adopters
+        2. All adopters BEFORE tariff
+        3. Matched never adopters
+        4. Unmatched never adopters
+
+    Input df_full should already be filtered by price if needed.
+    Example:
+        plot_matching_status_heatmaps(
+            df_full=month_result_full[month_result_full["price"] == "high"],
+            matched_control_ids=control_ids,
+            price_label="high"
+        )
+    """
+
+    matched_control_ids = set(matched_control_ids)
+
+    all_never_ids = set(
+        df_full.loc[df_full["tariff_start"].isna(), "aID"].unique()
+    )
+
+    all_adopter_ids = set(
+        df_full.loc[df_full["tariff_start"].notna(), "aID"].unique()
+    )
+
+    unmatched_never_ids = all_never_ids - matched_control_ids
+
+    groups = {
+        "All never adopters": df_full[df_full["aID"].isin(all_never_ids)],
+        "All adopters BEFORE tariff": df_full[
+            (df_full["aID"].isin(all_adopter_ids)) &
+            (df_full["tariff_active"] == 0)
+        ],
+        "Matched never adopters": df_full[df_full["aID"].isin(matched_control_ids)],
+        "Unmatched never adopters": df_full[df_full["aID"].isin(unmatched_never_ids)]
+    }
+
+    heatmaps = {
+        name: _make_average_peak_consumption_heatmap(subset)
+        for name, subset in groups.items()
+    }
+
+    if consumption_vmax is None:
+        consumption_vmax = _safe_max(*heatmaps.values())
+
+    consumption_vmax = _nice_upper_limit(consumption_vmax)
+    ticks = _make_nonnegative_ticks(consumption_vmax, n_ticks=tick_count)
+
+    fig, axes = plt.subplots(1, 4, figsize=(24, 5), sharey=True)
+
+    for ax, (name, heatmap) in zip(axes, heatmaps.items()):
+        sns.heatmap(
+            heatmap,
+            cmap="YlOrRd",
+            vmin=0,
+            vmax=consumption_vmax,
+            ax=ax,
+            cbar_kws={
+                "label": "Average Peak Consumption (kWh)",
+                "ticks": ticks
+            }
+        )
+
+        ax.set_title(name)
+        ax.set_xlabel("Hour")
+        ax.set_ylabel("Month")
+
+    title_map = {
+        "all": "Average Peak Consumption by Adoption and Matching Status (Overall Peaks)",
+        "high": "Average Peak Consumption by Adoption and Matching Status (High-Price Period Peaks)",
+        "low": "Average Peak Consumption by Adoption and Matching Status (Low-Price Period Peaks)"
+    }
+
+    fig.suptitle(
+        title_map.get(price_label, "Average Peak Consumption by Adoption and Matching Status"),
+        fontsize=16,
+        y=1.05
+    )
+
+    plt.tight_layout()
+    plt.show()
+
+    
+def get_population_heatmap_common_vmax(
+    dfs,
+    matched_control_ids,
+    tick_nice=True
+):
+
+    matched_control_ids = set(matched_control_ids)
+    heatmaps = []
+
+    for df in dfs:
+
+        # 1. all households
+        heatmaps.append(
+            _make_average_peak_consumption_heatmap(df)
+        )
+
+        # 2. group ids
+        all_never_ids = set(
+            df.loc[df["tariff_start"].isna(), "aID"].unique()
+        )
+
+        all_adopter_ids = set(
+            df.loc[df["tariff_start"].notna(), "aID"].unique()
+        )
+
+        unmatched_never_ids = all_never_ids - matched_control_ids
+
+        group_dfs = [
+            df[df["aID"].isin(all_never_ids)],
+            df[
+                (df["aID"].isin(all_adopter_ids)) &
+                (df["tariff_active"] == 0)
+            ],
+            df[
+                (df["aID"].isin(matched_control_ids)) &
+                (df["tariff_start"].isna())
+            ],
+            df[
+                (df["aID"].isin(unmatched_never_ids)) &
+                (df["tariff_start"].isna())
+            ]
+        ]
+
+        for subset in group_dfs:
+            heatmaps.append(
+                _make_average_peak_consumption_heatmap(subset)
+            )
+
+    vmax = _safe_max(*heatmaps)
+
+    if tick_nice:
+        vmax = _nice_upper_limit(vmax)
+
+    return vmax
