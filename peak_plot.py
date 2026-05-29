@@ -724,29 +724,62 @@ def _make_average_peak_consumption_heatmap(df, months=None, hours=None):
     return heatmap.reindex(index=months, columns=hours)
 
 
-def plot_all_households_heatmap(
+def plot_all_households_before_after_heatmap(
     df,
     price_label="high",
     consumption_vmax=None,
     tick_count=5
 ):
     """
-    1×1 heatmap for all households.
-    Input df should already be filtered, e.g. df[df["price"] == "high"].
+    1×2 heatmap:
+        1. All households BEFORE tariff
+           = never adopters + adopters before tariff
+
+        2. All households AFTER tariff
+           = never adopters + adopters after tariff
+
+    Input df can already be filtered by price, e.g.
+        df[df["price"] == "high"]
     """
 
-    heatmap = _make_average_peak_consumption_heatmap(df)
+    before_df = df[
+        df["tariff_start"].isna() |
+        (
+            df["tariff_start"].notna() &
+            (df["tariff_active"] == 0)
+        )
+    ]
+
+    after_df = df[
+        df["tariff_start"].isna() |
+        (
+            df["tariff_start"].notna() &
+            (df["tariff_active"] == 1)
+        )
+    ]
+
+    before_heatmap = _make_average_peak_consumption_heatmap(before_df)
+    after_heatmap = _make_average_peak_consumption_heatmap(after_df)
 
     if consumption_vmax is None:
-        consumption_vmax = _safe_max(heatmap)
+        consumption_vmax = _safe_max(before_heatmap, after_heatmap)
 
     consumption_vmax = _nice_upper_limit(consumption_vmax)
     ticks = _make_nonnegative_ticks(consumption_vmax, n_ticks=tick_count)
 
-    plt.figure(figsize=(10, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(18, 5), sharey=True)
+
+    title_map = {
+        "all": "Overall Peaks",
+        "high": "High-Price Period Peaks",
+        "low": "Low-Price Period Peaks"
+    }
+
+    peak_label = title_map.get(price_label, "Average Peak Consumption")
 
     sns.heatmap(
-        heatmap,
+        before_heatmap,
+        ax=axes[0],
         cmap="YlOrRd",
         vmin=0,
         vmax=consumption_vmax,
@@ -756,18 +789,29 @@ def plot_all_households_heatmap(
         }
     )
 
-    title_map = {
-        "all": "All Households: Average Peak Consumption (Overall Peaks)",
-        "high": "All Households: Average Peak Consumption (High-Price Period Peaks)",
-        "low": "All Households: Average Peak Consumption (Low-Price Period Peaks)"
-    }
+    axes[0].set_title(f"All Households: Before Tariff\n({peak_label})")
+    axes[0].set_xlabel("Hour")
+    axes[0].set_ylabel("Month")
 
-    plt.title(title_map.get(price_label, "All Households: Average Peak Consumption"))
-    plt.xlabel("Hour")
-    plt.ylabel("Month")
+    sns.heatmap(
+        after_heatmap,
+        ax=axes[1],
+        cmap="YlOrRd",
+        vmin=0,
+        vmax=consumption_vmax,
+        cbar_kws={
+            "label": "Average Peak Consumption (kWh)",
+            "ticks": ticks
+        }
+    )
+
+    axes[1].set_title(f"All Households: After Tariff\n({peak_label})")
+    axes[1].set_xlabel("Hour")
+    axes[1].set_ylabel("")
 
     plt.tight_layout()
     plt.show()
+
 
 
 def plot_matching_status_heatmaps(
@@ -872,12 +916,6 @@ def get_population_heatmap_common_vmax(
 
     for df in dfs:
 
-        # 1. all households
-        heatmaps.append(
-            _make_average_peak_consumption_heatmap(df)
-        )
-
-        # 2. group ids
         all_never_ids = set(
             df.loc[df["tariff_start"].isna(), "aID"].unique()
         )
@@ -888,7 +926,25 @@ def get_population_heatmap_common_vmax(
 
         unmatched_never_ids = all_never_ids - matched_control_ids
 
+        all_before_df = df[
+            df["tariff_start"].isna() |
+            (
+                df["tariff_start"].notna() &
+                (df["tariff_active"] == 0)
+            )
+        ]
+
+        all_after_df = df[
+            df["tariff_start"].isna() |
+            (
+                df["tariff_start"].notna() &
+                (df["tariff_active"] == 1)
+            )
+        ]
+
         group_dfs = [
+            all_before_df,
+            all_after_df,
             df[df["aID"].isin(all_never_ids)],
             df[
                 (df["aID"].isin(all_adopter_ids)) &
