@@ -822,7 +822,7 @@ def plot_matching_status_heatmaps(
     tick_count=5
 ):
     """
-    1×4 heatmaps:
+    2×2 heatmaps:
         1. All never adopters
         2. All adopters BEFORE tariff
         3. Matched never adopters
@@ -870,7 +870,8 @@ def plot_matching_status_heatmaps(
     consumption_vmax = _nice_upper_limit(consumption_vmax)
     ticks = _make_nonnegative_ticks(consumption_vmax, n_ticks=tick_count)
 
-    fig, axes = plt.subplots(1, 4, figsize=(24, 5), sharey=True)
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharey=True)
+    axes = axes.ravel()  
 
     for ax, (name, heatmap) in zip(axes, heatmaps.items()):
         sns.heatmap(
